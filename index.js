@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2024-06-24 22:03:14
+ * @LastEditTime: 2024-06-24 22:42:39
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -22,9 +22,12 @@ app.use(bodyParser.json());
 
 // 定义不同模型的限流配置
 const modelRateLimits = {
-  'gpt-4-turbo': { windowMs: 60 * 1000, max: 2 }, // 1 分钟 2 次
-  'gpt-4o': { windowMs: 30 * 1000, max: 1 }, // 30 秒 1 次
-  'Doubao-pro-4k': { windowMs:1 * 60 * 60 * 1000, max: 3 }, 
+  'gpt-4-turbo': { windowMs: 3 * 60 * 60 * 1000, max: 10 }, 
+  'gpt-4o': { windowMs: 3 * 60 * 60 * 1000, max: 15 }, 
+  'claude-3-haiku-20240307': { windowMs:7 * 24 * 60 * 60 * 1000, max: 1 }, 
+  'claude-2.1': { windowMs: 1 * 24 * 60 * 60 * 1000, max: 2 }, 
+  'gemini-1.5-pro-latest': { windowMs: 30 * 60 * 1000, max: 30 }, 
+  'gemini-1.5-flash-latest': { windowMs: 30 * 60 * 1000, max: 30 }, 
 };
 
 // 创建限流中间件实例，并存储在对象中
