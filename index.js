@@ -1,17 +1,23 @@
-/*
- * @Author: liujiarong godisljr@163.com
- * @Date: 2024-06-24 08:45:45
- * @LastEditors: liujiarong godisljr@163.com
- * @LastEditTime: 2024-06-24 08:46:33
+/**
+ * @Author: Liu Jiarong
+ * @Date: 2024-06-24 19:48:52
+ * @LastEditors: Liu Jiarong
+ * @LastEditTime: 2024-06-24 20:59:21
  * @FilePath: /openAILittle/index.js
- * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
+ * @Description: 
+ * @
+ * @Copyright (c) 2024 by ${git_name_email}, All Rights Reserved. 
  */
+
 const express = require('express');
-const { createProxyMiddleware } = require('http-proxy-middleware');
+const { createProxyMiddleware, fixRequestBody} = require('http-proxy-middleware');
 const rateLimit = require('express-rate-limit');
+const bodyParser = require('body-parser');
 
 const app = express();
 
+// 使用body-parser中间件来解析POST请求的参数
+app.use(bodyParser.json());
 // 限流配置
 const rateLimitConfig = {
   windowMs: 60 * 1000, // 1 分钟时间窗口
@@ -37,13 +43,9 @@ const rateLimiter = rateLimit(rateLimitConfig);
 const openAIProxy = createProxyMiddleware({
   target: 'https://api.liujiarong.top',
   changeOrigin: true,
-  onProxyReq: (proxyReq, req, res) => {
-    console.log(`Proxying request to: ${req.method} ${proxyReq.path} from ${req.ip}`);
+  on: {
+    proxyReq: fixRequestBody,
   },
-  onError: (err, req, res) => {
-    console.error(`Proxy error from ${req.ip}: ${err}`);
-    res.status(500).json({ error: '代理服务器错误' });
-  }
 });
 
 // 对 /v1/chat/completions 路径应用限流中间件
