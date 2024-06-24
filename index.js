@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2024-06-24 22:42:39
+ * @LastEditTime: 2024-06-24 22:59:25
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -28,6 +28,7 @@ const modelRateLimits = {
   'claude-2.1': { windowMs: 1 * 24 * 60 * 60 * 1000, max: 2 }, 
   'gemini-1.5-pro-latest': { windowMs: 30 * 60 * 1000, max: 30 }, 
   'gemini-1.5-flash-latest': { windowMs: 30 * 60 * 1000, max: 30 }, 
+  'Doubao-pro-4k': { windowMs: 1 * 60 * 1000, max: 1 }, 
 };
 
 // 创建限流中间件实例，并存储在对象中
