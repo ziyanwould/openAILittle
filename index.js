@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2024-06-24 22:59:25
+ * @LastEditTime: 2024-06-25 22:26:17
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -15,6 +15,7 @@ const rateLimit = require('express-rate-limit');
 const bodyParser = require('body-parser');
 const moment = require('moment');
 
+// Node.js 18 以上版本支持原生的 fetch API
 const app = express();
 
 app.use(bodyParser.json({ limit: '30mb' }));
@@ -60,14 +61,14 @@ const modelRateLimits = {
   },
   'Doubao-pro-4k': {
     limits: [
-      { windowMs: 1 * 60 * 1000, max: 6 }, 
+      { windowMs: 1 * 60 * 1000, max: 4}, 
       { windowMs: 2 * 60 * 1000, max: 10 }, 
     ],
     dailyLimit: 15, // Doubao-pro-4k 每天总限制 500 次
   },
   'Doubao-lite-4k': {
     limits: [
-      { windowMs: 1 * 60 * 1000, max: 5 }, 
+      { windowMs: 1 * 60 * 1000, max: 3 }, 
       { windowMs: 3 * 60 * 1000, max: 8 }, 
     ],
     dailyLimit: 17, // Doubao-pro-4k 每天总限制 500 次
@@ -76,6 +77,41 @@ const modelRateLimits = {
 
 // 创建一个对象来存储每个模型每天的请求计数
 const dailyRequestCounts = {};
+
+// 飞书通知函数
+async function larkTweet(data) {
+  const webhookUrl = "https://open.feishu.cn/open-apis/bot/v2/hook/b99372d6-61f8-4fcc-bd6f-01689652fa08"; 
+
+  try {
+    // 使用原生的 fetch API 发送通知
+    (async () => {
+      const response = await fetch(webhookUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          msg_type: "text",
+          content: {
+            text: data,
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to send message to Lark: ${response.status} ${response.statusText}`);
+      }
+
+      const responseData = await response.json();
+      console.log("Message sent to Lark successfully:", responseData);
+    })().catch((error) => {
+      console.error('Failed to send rate limit notification to Lark:', error);
+    });
+
+  } catch (error) {
+    console.error('Failed to send rate limit notification to Lark:', error);
+  }
+}
 
 // 创建限流中间件实例，并存储在对象中
 const rateLimiters = {};
@@ -105,6 +141,9 @@ for (const modelName in modelRateLimits) {
           duration.seconds() > 0 ? `${duration.seconds()} 秒` : '',
         ].filter(Boolean).join(' '); 
 
+        // 异步发送飞书通知，不等待结果
+        larkTweet(` OpenAI 代理服务器限流提醒：\n\n模型：${modelName}\nIP 地址：${req.body.user}\n时间：${moment().format('YYYY-MM-DD HH:mm:ss')}\n请在 ${formattedDuration} 后再试。${modelName} 模型在 ${windowMs / 1000} 秒内的最大请求次数为 ${max} 次`);
+      
         res.status(400).json({
           error: `请求过于频繁，请在 ${formattedDuration} 后再试。${modelName} 模型在 ${windowMs / 1000} 秒内的最大请求次数为 ${max} 次。如需更多需求，请访问 https://chatnio.liujiarong.top`
         });
@@ -122,7 +161,11 @@ for (const modelName in modelRateLimits) {
 
     if (dailyRequestCounts[key] >= dailyLimit) {
       console.log(`Daily request limit reached for model ${modelName}`);
-      return res.status(400).json({ // 添加 return 语句
+
+      // 异步发送飞书通知，不等待结果
+      larkTweet(` OpenAI 代理服务器日调用量已达上限：\n\n模型：${modelName}\n时间：${moment().format('YYYY-MM-DD HH:mm:ss')}`);
+
+      return res.status(400).json({ 
         error: `今天${modelName} 模型总的请求次数已达上限，请明天再试。`
       });
     }
