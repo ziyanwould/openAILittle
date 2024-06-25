@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2024-06-25 22:26:17
+ * @LastEditTime: 2024-06-26 00:10:24
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -26,52 +26,47 @@ const modelRateLimits = {
     limits: [
       { windowMs: 3 * 60 * 60 * 1000, max: 10 }, 
     ],
-    dailyLimit: 500, // 例如，gpt-4-turbo 每天总限制 500 次
+    dailyLimit: 120, // 例如，gpt-4-turbo 每天总限制 500 次
   },
   'gpt-4o': {
     limits: [
-      { windowMs: 60 * 1000, max: 1 }, // 每分钟 1 次
-      { windowMs: 24 * 60 * 60 * 1000, max: 200 }, // 每天 200 次
+      { windowMs: 3 * 60 * 60 * 1000, max: 15 }, // 每分钟 1 次
     ],
-    dailyLimit: 300, // 例如，gpt-4o 每天总限制 300 次
+    dailyLimit: 500, // 例如，gpt-4o 每天总限制 300 次
   },
   'claude-3-haiku-20240307': {
     limits: [
-      { windowMs: 7 * 24 * 60 * 60 * 1000, max: 1 }, 
+      { windowMs: 7 * 24 * 60 * 60 * 1000, max: 3 }, 
     ],
-    dailyLimit: 100, 
-  },
-  'claude-2.1': {
-    limits: [
-      { windowMs: 1 * 24 * 60 * 60 * 1000, max: 2 }, 
-    ],
-    dailyLimit: 50, 
+    dailyLimit: 20, 
   },
   'gemini-1.5-pro-latest': {
     limits: [
+      { windowMs: 1 * 60 * 1000, max: 1}, 
       { windowMs: 30 * 60 * 1000, max: 30 }, 
     ],
-    dailyLimit: 200, 
+    dailyLimit: 800, 
   },
   'gemini-1.5-flash-latest': {
     limits: [
+      { windowMs: 1 * 60 * 1000, max: 1}, 
       { windowMs: 30 * 60 * 1000, max: 30 }, 
     ],
-    dailyLimit: 200, 
+    dailyLimit: 800, 
   },
   'Doubao-pro-4k': {
     limits: [
       { windowMs: 1 * 60 * 1000, max: 4}, 
-      { windowMs: 2 * 60 * 1000, max: 10 }, 
+      { windowMs: 30 * 60 * 1000, max: 30 }, 
     ],
-    dailyLimit: 15, // Doubao-pro-4k 每天总限制 500 次
+    dailyLimit: 1500, // Doubao-pro-4k 每天总限制 500 次
   },
-  'Doubao-lite-4k': {
+  'Doubao-pro-128k': {
     limits: [
-      { windowMs: 1 * 60 * 1000, max: 3 }, 
-      { windowMs: 3 * 60 * 1000, max: 8 }, 
+      { windowMs: 1 * 60 * 1000, max: 5}, 
+      { windowMs: 30 * 60 * 1000, max: 30 }, 
     ],
-    dailyLimit: 17, // Doubao-pro-4k 每天总限制 500 次
+    dailyLimit: 2000, // Doubao-pro-4k 每天总限制 500 次
   },
 };
 
