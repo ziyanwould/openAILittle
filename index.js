@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2024-06-26 00:10:24
+ * @LastEditTime: 2024-06-26 00:26:40
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -43,14 +43,14 @@ const modelRateLimits = {
   'gemini-1.5-pro-latest': {
     limits: [
       { windowMs: 1 * 60 * 1000, max: 1}, 
-      { windowMs: 30 * 60 * 1000, max: 30 }, 
+      { windowMs: 30 * 60 * 1000, max: 20 }, 
     ],
     dailyLimit: 800, 
   },
   'gemini-1.5-flash-latest': {
     limits: [
       { windowMs: 1 * 60 * 1000, max: 1}, 
-      { windowMs: 30 * 60 * 1000, max: 30 }, 
+      { windowMs: 30 * 60 * 1000, max: 25 }, 
     ],
     dailyLimit: 800, 
   },
