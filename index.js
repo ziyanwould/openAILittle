@@ -21,35 +21,68 @@ app.use(bodyParser.json({ limit: '30mb' }));
 
 // 定义不同模型的多重限流配置
 const modelRateLimits = {
-  'gpt-4-turbo': [
-    { windowMs: 3 * 60 * 60 * 1000, max: 10 }, 
-  ],
-  'gpt-4o': [
-    { windowMs: 60 * 1000, max: 1 }, // 每分钟 1 次
-    { windowMs: 24 * 60 * 60 * 1000, max: 200 }, // 每天 200 次
-  ],
-  'claude-3-haiku-20240307': [
-    { windowMs: 7 * 24 * 60 * 60 * 1000, max: 1 }, 
-  ],
-  'claude-2.1': [
-    { windowMs: 1 * 24 * 60 * 60 * 1000, max: 2 }, 
-  ],
-  'gemini-1.5-pro-latest': [
-    { windowMs: 30 * 60 * 1000, max: 30 }, 
-  ],
-  'gemini-1.5-flash-latest': [
-    { windowMs: 30 * 60 * 1000, max: 30 }, 
-  ],
-  'Doubao-pro-4k': [
-    { windowMs: 1 * 60 * 1000, max: 10 }, 
-    { windowMs: 60 * 60 * 1000, max: 15 }, 
-  ],
+  'gpt-4-turbo': {
+    limits: [
+      { windowMs: 3 * 60 * 60 * 1000, max: 10 }, 
+    ],
+    dailyLimit: 500, // 例如，gpt-4-turbo 每天总限制 500 次
+  },
+  'gpt-4o': {
+    limits: [
+      { windowMs: 60 * 1000, max: 1 }, // 每分钟 1 次
+      { windowMs: 24 * 60 * 60 * 1000, max: 200 }, // 每天 200 次
+    ],
+    dailyLimit: 300, // 例如，gpt-4o 每天总限制 300 次
+  },
+  'claude-3-haiku-20240307': {
+    limits: [
+      { windowMs: 7 * 24 * 60 * 60 * 1000, max: 1 }, 
+    ],
+    dailyLimit: 100, 
+  },
+  'claude-2.1': {
+    limits: [
+      { windowMs: 1 * 24 * 60 * 60 * 1000, max: 2 }, 
+    ],
+    dailyLimit: 50, 
+  },
+  'gemini-1.5-pro-latest': {
+    limits: [
+      { windowMs: 30 * 60 * 1000, max: 30 }, 
+    ],
+    dailyLimit: 200, 
+  },
+  'gemini-1.5-flash-latest': {
+    limits: [
+      { windowMs: 30 * 60 * 1000, max: 30 }, 
+    ],
+    dailyLimit: 200, 
+  },
+  'Doubao-pro-4k': {
+    limits: [
+      { windowMs: 1 * 60 * 1000, max: 6 }, 
+      { windowMs: 2 * 60 * 1000, max: 10 }, 
+    ],
+    dailyLimit: 15, // Doubao-pro-4k 每天总限制 500 次
+  },
+  'Doubao-lite-4k': {
+    limits: [
+      { windowMs: 1 * 60 * 1000, max: 5 }, 
+      { windowMs: 3 * 60 * 1000, max: 8 }, 
+    ],
+    dailyLimit: 17, // Doubao-pro-4k 每天总限制 500 次
+  },
 };
+
+// 创建一个对象来存储每个模型每天的请求计数
+const dailyRequestCounts = {};
 
 // 创建限流中间件实例，并存储在对象中
 const rateLimiters = {};
 for (const modelName in modelRateLimits) {
-  rateLimiters[modelName] = modelRateLimits[modelName].map(({ windowMs, max }) => {
+  const { limits, dailyLimit } = modelRateLimits[modelName];
+
+  rateLimiters[modelName] = limits.map(({ windowMs, max }) => {
     return rateLimit({
       windowMs,
       max,
@@ -77,6 +110,25 @@ for (const modelName in modelRateLimits) {
         });
       },
     });
+  });
+
+  // 添加每日总请求次数限制中间件
+  rateLimiters[modelName].push((req, res, next) => {
+    const now = moment().startOf('day'); // 获取今天零点时刻
+    const key = `${modelName}-${now.format('YYYY-MM-DD')}`; // 当天请求计数的 key
+
+    // 初始化计数器
+    dailyRequestCounts[key] = dailyRequestCounts[key] || 0;
+
+    if (dailyRequestCounts[key] >= dailyLimit) {
+      console.log(`Daily request limit reached for model ${modelName}`);
+      return res.status(400).json({ // 添加 return 语句
+        error: `今天${modelName} 模型总的请求次数已达上限，请明天再试。`
+      });
+    }
+
+    dailyRequestCounts[key]++;
+    next();
   });
 }
 
@@ -123,7 +175,8 @@ app.use('/', (req, res, next) => {
         next(); 
       } catch (err) {
         // 捕获限流中间件抛出的错误
-        next(err); 
+        // 这里不需要做任何处理，因为错误已经被处理过了
+        // next(err); 
       }
     })();
   } else {
