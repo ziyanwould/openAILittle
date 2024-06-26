@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2024-06-26 00:33:24
+ * @LastEditTime: 2024-06-26 07:57:32
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -44,6 +44,7 @@ const modelRateLimits = {
     limits: [
       { windowMs: 2 * 60 * 1000, max: 3}, 
       { windowMs: 30 * 60 * 1000, max: 20 }, 
+      { windowMs: 3 * 60 * 60 * 1000, max: 100 }
     ],
     dailyLimit: 800, 
   },
@@ -51,6 +52,7 @@ const modelRateLimits = {
     limits: [
       { windowMs: 2 * 60 * 1000, max: 3}, 
       { windowMs: 30 * 60 * 1000, max: 25 }, 
+      { windowMs: 3 * 60 * 60 * 1000, max: 100 }
     ],
     dailyLimit: 800, 
   },
@@ -63,10 +65,10 @@ const modelRateLimits = {
   },
   'Doubao-pro-128k': {
     limits: [
-      { windowMs: 1 * 60 * 1000, max: 5}, 
+      { windowMs: 1 * 60 * 1000, max: 4}, 
       { windowMs: 30 * 60 * 1000, max: 30 }, 
     ],
-    dailyLimit: 2000, // Doubao-pro-4k 每天总限制 500 次
+    dailyLimit: 1500, // Doubao-pro-4k 每天总限制 500 次
   },
 };
 
@@ -74,35 +76,71 @@ const modelRateLimits = {
 const dailyRequestCounts = {};
 
 // 飞书通知函数
-async function larkTweet(data) {
+async function larkTweet(data, requestBody) {
   const webhookUrl = "https://open.feishu.cn/open-apis/bot/v2/hook/b99372d6-61f8-4fcc-bd6f-01689652fa08"; 
 
   try {
-    // 使用原生的 fetch API 发送通知
-    (async () => {
-      const response = await fetch(webhookUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          msg_type: "text",
-          content: {
-            text: data,
-          },
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to send message to Lark: ${response.status} ${response.statusText}`);
-      }
-
-      const responseData = await response.json();
-      console.log("Message sent to Lark successfully:", responseData);
-    })().catch((error) => {
-      console.error('Failed to send rate limit notification to Lark:', error);
+    const response = await fetch(webhookUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        msg_type: "post", // 使用 "post" 类型可以发送更丰富的消息格式
+        content: {
+          post: {
+            zh_cn: {
+              title: "OpenAI 代理服务器限流提醒",
+              content: [
+                [
+                  {
+                    "tag": "text",
+                    "text": `模型：${data.modelName}`
+                  }
+                ],
+                [
+                  {
+                    "tag": "text",
+                    "text": `IP 地址：${data.ip}`
+                  }
+                ],
+                [
+                  {
+                    "tag": "text",
+                    "text": `时间：${data.time}`
+                  }
+                ],
+                [
+                  {
+                    "tag": "text",
+                    "text": `用户在 ${data.windowMs / 1000} 秒内的最大请求次数为 ${data.max} 次，请在 ${data.duration} 后再试。`
+                  }
+                ],
+                [
+                  {
+                    "tag": "text",
+                    "text": "用户请求内容："
+                  }
+                ],
+                [
+                  {
+                    "tag": "text",
+                    "text": `${requestBody}`
+                  }
+                ]
+              ]
+            }
+          }
+        }
+      }),
     });
 
+    if (!response.ok) {
+      throw new Error(`Failed to send message to Lark: ${response.status} ${response.statusText}`);
+    }
+
+    const responseData = await response.json();
+    console.log("Message sent to Lark successfully:", responseData);
   } catch (error) {
     console.error('Failed to send rate limit notification to Lark:', error);
   }
@@ -136,8 +174,18 @@ for (const modelName in modelRateLimits) {
           duration.seconds() > 0 ? `${duration.seconds()} 秒` : '',
         ].filter(Boolean).join(' '); 
 
-        // 异步发送飞书通知，不等待结果
-        larkTweet(` OpenAI 代理服务器限流提醒：\n\n模型：${modelName}\nIP 地址：${req.body.user}\n时间：${moment().format('YYYY-MM-DD HH:mm:ss')}\n请在 ${formattedDuration} 后再试。${modelName} 模型在 ${windowMs / 1000} 秒内的最大请求次数为 ${max} 次`);
+        // 格式化用户请求内容
+        const formattedRequestBody = JSON.stringify(req.body, null, 2);
+
+        // 发送飞书通知，包含格式化的用户请求内容
+        larkTweet({
+          modelName,
+          ip: req.body.user,
+          time: moment().format('YYYY-MM-DD HH:mm:ss'),
+          duration: formattedDuration,
+          windowMs,
+          max
+        }, formattedRequestBody);
       
         res.status(400).json({
           error: `请求过于频繁，请在 ${formattedDuration} 后再试。${modelName} 模型在 ${windowMs / 1000} 秒内的最大请求次数为 ${max} 次。如需更多需求，请访问 https://chatnio.liujiarong.top`
@@ -157,8 +205,18 @@ for (const modelName in modelRateLimits) {
     if (dailyRequestCounts[key] >= dailyLimit) {
       console.log(`Daily request limit reached for model ${modelName}`);
 
-      // 异步发送飞书通知，不等待结果
-      larkTweet(` OpenAI 代理服务器日调用量已达上限：\n\n模型：${modelName}\n时间：${moment().format('YYYY-MM-DD HH:mm:ss')}`);
+      // 格式化用户请求内容
+      const formattedRequestBody = JSON.stringify(req.body, null, 2);
+
+      // 发送飞书通知，包含格式化的用户请求内容
+      larkTweet({
+        modelName,
+        ip: req.body.user,
+        time: moment().format('YYYY-MM-DD HH:mm:ss'),
+        duration: '24 小时', // 每日限制，所以持续时间为 24 小时
+        windowMs: 24 * 60 * 60 * 1000, // 24 小时对应的毫秒数
+        max: dailyLimit
+      }, formattedRequestBody);
 
       return res.status(400).json({ 
         error: `今天${modelName} 模型总的请求次数已达上限，请明天再试。`
@@ -181,6 +239,7 @@ const openAIProxy = createProxyMiddleware({
 
 // 中间件函数，根据请求参数应用不同的限流策略
 app.use('/', (req, res, next) => {
+  // console.log('req',req.cookies)
   let modelName = null;
   console.log('user',req.body.user)
 
