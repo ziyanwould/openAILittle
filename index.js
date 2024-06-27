@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2024-06-26 12:43:55
+ * @LastEditTime: 2024-06-27 20:42:46
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -14,7 +14,7 @@ const { createProxyMiddleware, fixRequestBody } = require('http-proxy-middleware
 const rateLimit = require('express-rate-limit');
 const bodyParser = require('body-parser');
 const moment = require('moment');
-// const fetch = require('node-fetch'); // 请确保你已经安装了 node-fetch
+const crypto = require('crypto'); // 引入 crypto 模块
 
 // Node.js 18 以上版本支持原生的 fetch API
 const app = express();
@@ -87,6 +87,12 @@ const recentRequestsCache = new Map();
 // 设置缓存过期时间（例如，5 分钟）
 const cacheExpirationTimeMs = 5 * 60 * 1000;
 
+// 用于存储每个用户的最近请求时间和模型
+const userRequestHistory = new Map();
+
+// 用于存储最近请求内容的哈希值和时间戳
+const recentRequestContentHashes = new Map();
+
 // 封装修改 req.body 的中间件函数
 const modifyRequestBodyMiddleware = (req, res, next) => {
   if (req.body && req.body.model) {
@@ -103,6 +109,7 @@ const modifyRequestBodyMiddleware = (req, res, next) => {
   }
   next();
 };
+
 // 飞书通知函数
 async function larkTweet(data, requestBody) {
   const webhookUrl = "https://open.feishu.cn/open-apis/bot/v2/hook/b99372d6-61f8-4fcc-bd6f-01689652fa08"; 
@@ -235,10 +242,7 @@ for (const modelName in modelRateLimits) {
           max
         }, formattedRequestBody);
 
-       console.log(`请求过于频繁，请在 ${formattedDuration} 后再试。${modelName} 模型在 ${windowMs / 1000} 秒内的最大请求次数为 ${max} 次。`)
-        //res.status(400).json({
-         // error: `请求过于频繁，请在 ${formattedDuration} 后再试。${modelName} 模型在 ${windowMs / 1000} 秒内的最大请求次数为 ${max} 次。如需更多需求，请访问 https://chatnio.liujiarong.top`
-       // });
+        console.log(`请求过于频繁，请在 ${formattedDuration} 后再试。${modelName} 模型在 ${windowMs / 1000} 秒内的最大请求次数为 ${max} 次。`)
         return res.status(429).json({
           error: '请求过于频繁，请稍后再试。',
         });
@@ -317,9 +321,88 @@ const chatnioProxy = createProxyMiddleware({
 // 应用 modifyRequestBodyMiddleware 中间件
 app.use(modifyRequestBodyMiddleware); 
 
-
 // 应用 /chatnio 代理中间件
 app.use('/chatnio', chatnioProxy);
+
+// 中间件函数，用于限制同一用户短时间内请求多个模型
+app.use('/', (req, res, next) => {
+  const userId = req.body.user;
+  const modelName = req.body.model;
+  const currentTime = Date.now();
+
+  if (userId && modelName) {
+    if (!userRequestHistory.has(userId)) {
+      userRequestHistory.set(userId, {
+        lastRequestTime: currentTime,
+        modelsRequested: new Set([modelName]),
+      });
+    } else {
+      const userData = userRequestHistory.get(userId);
+      const timeDifference = currentTime - userData.lastRequestTime;
+
+      if (timeDifference <= 1500) {
+        // 1 秒内
+        userData.modelsRequested.add(modelName);
+
+        if (userData.modelsRequested.size > 2) {
+          console.log(
+            `${moment().format(
+              'YYYY-MM-DD HH:mm:ss'
+            )} User ${userId} requested more than 2 models within 1.5 second.`
+          );
+          return res.status(429).json({
+            error: '请求过于频繁，请稍后再试。',
+          });
+        }
+      } else {
+        // 超过 1.5 秒，重置数据
+        userData.lastRequestTime = currentTime;
+        userData.modelsRequested = new Set([modelName]);
+      }
+    }
+  }
+
+  next();
+});
+
+// 中间件函数，用于限制不同用户短时间内发送相似请求
+app.use('/', (req, res, next) => {
+  const requestContent = req.body.messages && req.body.messages[0] && req.body.messages[0].content;
+
+  if (requestContent) {
+    // 使用 SHA-256 生成更独特的哈希值
+    const requestContentHash = crypto.createHash('sha256').update(requestContent).digest('hex');
+
+    const currentTime = Date.now();
+
+    if (recentRequestContentHashes.has(requestContentHash)) {
+      const lastRequestTime = recentRequestContentHashes.get(requestContentHash);
+      const timeDifference = currentTime - lastRequestTime;
+
+      if (timeDifference <= 3000) {
+        // 3 秒内出现相同请求内容
+        console.log(
+          `${moment().format(
+            'YYYY-MM-DD HH:mm:ss'
+          )} Similar request detected and blocked.`
+        );
+        return res.status(429).json({
+          error: '请求过于频繁，请稍后再试。',
+        });
+      }
+    }
+
+    // 更新缓存
+    recentRequestContentHashes.set(requestContentHash, currentTime);
+
+    // 定期清理缓存，例如每分钟清理一次
+    setInterval(() => {
+      recentRequestContentHashes.clear();
+    }, 60 * 1000);
+  }
+
+  next();
+});
 
 // 中间件函数，根据请求参数应用不同的限流策略和过滤重复请求
 app.use('/', (req, res, next) => {
