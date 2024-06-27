@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2024-06-27 20:42:46
+ * @LastEditTime: 2024-06-28 00:12:04
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -137,6 +137,12 @@ async function larkTweet(data, requestBody) {
                   {
                     "tag": "text",
                     "text": `IP 地址：${data.ip}`
+                  }
+                ],
+                [
+                  {
+                    "tag": "text",
+                    "text": `用户 ID：${data.userId}`
                   }
                 ],
                 [
@@ -419,12 +425,14 @@ app.use('/', (req, res, next) => {
   const formattedRequestBody = JSON.stringify(req.body, null, 2);
 
   // 发送飞书通知，包含格式化的用户请求内容
-  larkTweet({
-    modelName,
-    ip: req.body.user,
-    time: moment().format('YYYY-MM-DD HH:mm:ss'),
-  }, formattedRequestBody);
-
+  if(modelName){
+    larkTweet({
+      modelName,
+      ip: req.ip,
+      userId: req.body.user,
+      time: moment().format('YYYY-MM-DD HH:mm:ss'),
+    }, formattedRequestBody);
+  }
   // 检查是否为 gemini-1.5-pro-latest 模型的请求
   if (modelName === 'gemini-1.5-pro-latest') {
     const requestContent = req.body.messages && req.body.messages[0] && req.body.messages[0].content;
@@ -479,7 +487,7 @@ app.use('/', (req, res, next) => {
       }
     })();
   } else {
-    console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')}  No rate limiter for model: ${modelName || 'unknown'}`);
+    console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')}  No rate limiter for model: ${modelName || 'unknown'}  ip ${req.ip}`);
     next();
   }
 }, openAIProxy);
