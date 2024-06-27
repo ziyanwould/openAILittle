@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2024-06-26 07:57:32
+ * @LastEditTime: 2024-06-26 12:43:55
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -14,6 +14,7 @@ const { createProxyMiddleware, fixRequestBody } = require('http-proxy-middleware
 const rateLimit = require('express-rate-limit');
 const bodyParser = require('body-parser');
 const moment = require('moment');
+// const fetch = require('node-fetch'); // 请确保你已经安装了 node-fetch
 
 // Node.js 18 以上版本支持原生的 fetch API
 const app = express();
@@ -24,25 +25,29 @@ app.use(bodyParser.json({ limit: '30mb' }));
 const modelRateLimits = {
   'gpt-4-turbo': {
     limits: [
+      { windowMs: 1 * 60 * 1000, max: 1 }, 
       { windowMs: 3 * 60 * 60 * 1000, max: 10 }, 
     ],
     dailyLimit: 120, // 例如，gpt-4-turbo 每天总限制 500 次
   },
   'gpt-4o': {
     limits: [
+      { windowMs: 1 * 60 * 1000, max: 1 }, 
       { windowMs: 3 * 60 * 60 * 1000, max: 15 }, // 每分钟 1 次
     ],
     dailyLimit: 500, // 例如，gpt-4o 每天总限制 300 次
   },
   'claude-3-haiku-20240307': {
     limits: [
+      { windowMs: 5 * 60 * 1000, max: 1 }, 
       { windowMs: 7 * 24 * 60 * 60 * 1000, max: 3 }, 
     ],
     dailyLimit: 20, 
   },
   'gemini-1.5-pro-latest': {
     limits: [
-      { windowMs: 2 * 60 * 1000, max: 3}, 
+      { windowMs: 2 * 1000, max: 1 }, 
+      { windowMs: 60 * 1000, max: 4 }, 
       { windowMs: 30 * 60 * 1000, max: 20 }, 
       { windowMs: 3 * 60 * 60 * 1000, max: 100 }
     ],
@@ -50,7 +55,8 @@ const modelRateLimits = {
   },
   'gemini-1.5-flash-latest': {
     limits: [
-      { windowMs: 2 * 60 * 1000, max: 3}, 
+      { windowMs: 2 * 1000, max: 1 }, 
+      { windowMs: 60 * 1000, max: 4 }, 
       { windowMs: 30 * 60 * 1000, max: 25 }, 
       { windowMs: 3 * 60 * 60 * 1000, max: 100 }
     ],
@@ -58,14 +64,14 @@ const modelRateLimits = {
   },
   'Doubao-pro-4k': {
     limits: [
-      { windowMs: 1 * 60 * 1000, max: 4}, 
+      { windowMs: 1 * 60 * 1000, max: 4 }, 
       { windowMs: 30 * 60 * 1000, max: 30 }, 
     ],
     dailyLimit: 1500, // Doubao-pro-4k 每天总限制 500 次
   },
   'Doubao-pro-128k': {
     limits: [
-      { windowMs: 1 * 60 * 1000, max: 4}, 
+      { windowMs: 1 * 60 * 1000, max: 4 }, 
       { windowMs: 30 * 60 * 1000, max: 30 }, 
     ],
     dailyLimit: 1500, // Doubao-pro-4k 每天总限制 500 次
@@ -75,6 +81,28 @@ const modelRateLimits = {
 // 创建一个对象来存储每个模型每天的请求计数
 const dailyRequestCounts = {};
 
+// 创建一个缓存来存储最近的请求内容
+const recentRequestsCache = new Map();
+
+// 设置缓存过期时间（例如，5 分钟）
+const cacheExpirationTimeMs = 5 * 60 * 1000;
+
+// 封装修改 req.body 的中间件函数
+const modifyRequestBodyMiddleware = (req, res, next) => {
+  if (req.body && req.body.model) {
+    // 匹配 "huggingface/" 开头的模型，区分大小写
+    if (req.body.model.startsWith("huggingface/")) {
+      if (req.body.top_p !== undefined && req.body.top_p < 1) {
+        req.body.top_p = 0.5;
+      }
+    } 
+    // 匹配 "Baichuan" 开头的模型，区分大小写
+    else if (req.body.model.startsWith("Baichuan")) {
+      req.body.frequency_penalty = 1;
+    }
+  }
+  next();
+};
 // 飞书通知函数
 async function larkTweet(data, requestBody) {
   const webhookUrl = "https://open.feishu.cn/open-apis/bot/v2/hook/b99372d6-61f8-4fcc-bd6f-01689652fa08"; 
@@ -86,11 +114,11 @@ async function larkTweet(data, requestBody) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        msg_type: "post", // 使用 "post" 类型可以发送更丰富的消息格式
+        msg_type: "post", 
         content: {
           post: {
             zh_cn: {
-              title: "OpenAI 代理服务器限流提醒",
+              title: "OpenAI 代理服务器转发请求", 
               content: [
                 [
                   {
@@ -108,12 +136,6 @@ async function larkTweet(data, requestBody) {
                   {
                     "tag": "text",
                     "text": `时间：${data.time}`
-                  }
-                ],
-                [
-                  {
-                    "tag": "text",
-                    "text": `用户在 ${data.windowMs / 1000} 秒内的最大请求次数为 ${data.max} 次，请在 ${data.duration} 后再试。`
                   }
                 ],
                 [
@@ -139,10 +161,36 @@ async function larkTweet(data, requestBody) {
       throw new Error(`Failed to send message to Lark: ${response.status} ${response.statusText}`);
     }
 
-    const responseData = await response.json();
-    console.log("Message sent to Lark successfully:", responseData);
   } catch (error) {
     console.error('Failed to send rate limit notification to Lark:', error);
+  }
+}
+
+//钉钉
+async function sendDingTalkMessage(message) {
+  const webhookUrl = "https://oapi.dingtalk.com/robot/send?access_token=b24974e8baeb66e98b0325505e67a239860eade045056d541793e8a7daf3d2c6"; 
+
+  try {
+    const response = await fetch(webhookUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        msgtype: "text",
+        text: {
+          content: 'chatnio：'+message
+        }
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to send message to DingTalk: ${response.status} ${response.statusText}`);
+    }
+
+    console.log("Message sent successfully to DingTalk");
+  } catch (error) {
+    console.error('Failed to send message to DingTalk:', error);
   }
 }
 
@@ -164,7 +212,7 @@ for (const modelName in modelRateLimits) {
         return key;
       },
       handler: (req, res) => {
-        console.log(`Request for model ${modelName} from ${req.ip} has been rate limited.`);
+        console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Request for model ${modelName} from ${req.ip} has been rate limited.`);
 
         const duration = moment.duration(windowMs);
         const formattedDuration = [
@@ -186,9 +234,13 @@ for (const modelName in modelRateLimits) {
           windowMs,
           max
         }, formattedRequestBody);
-      
-        res.status(400).json({
-          error: `请求过于频繁，请在 ${formattedDuration} 后再试。${modelName} 模型在 ${windowMs / 1000} 秒内的最大请求次数为 ${max} 次。如需更多需求，请访问 https://chatnio.liujiarong.top`
+
+       console.log(`请求过于频繁，请在 ${formattedDuration} 后再试。${modelName} 模型在 ${windowMs / 1000} 秒内的最大请求次数为 ${max} 次。`)
+        //res.status(400).json({
+         // error: `请求过于频繁，请在 ${formattedDuration} 后再试。${modelName} 模型在 ${windowMs / 1000} 秒内的最大请求次数为 ${max} 次。如需更多需求，请访问 https://chatnio.liujiarong.top`
+       // });
+        return res.status(429).json({
+          error: '请求过于频繁，请稍后再试。',
         });
       },
     });
@@ -237,11 +289,41 @@ const openAIProxy = createProxyMiddleware({
   },
 });
 
-// 中间件函数，根据请求参数应用不同的限流策略
+// 创建 /chatnio 路径的代理中间件
+const chatnioProxy = createProxyMiddleware({
+  target: 'https://api.liujiarong.top',
+  changeOrigin: true,
+  pathRewrite: {
+    '^/chatnio': '/', // 移除 /chatnio 前缀
+  },
+  on: {
+    proxyReq: fixRequestBody,
+    proxyRes: (proxyRes, req, res) => {
+      // 异步发送飞书通知
+      (async () => {
+        try {
+          // 格式化用户请求内容
+          const formattedRequestBody = JSON.stringify(req.body, null, 2);
+
+          await sendDingTalkMessage(moment().format('YYYY-MM-DD HH:mm:ss')+'：'+formattedRequestBody);
+        } catch (error) {
+          console.error('Failed to send notification to Lark:', error);
+        }
+      })();
+    },
+  },
+});
+
+// 应用 modifyRequestBodyMiddleware 中间件
+app.use(modifyRequestBodyMiddleware); 
+
+
+// 应用 /chatnio 代理中间件
+app.use('/chatnio', chatnioProxy);
+
+// 中间件函数，根据请求参数应用不同的限流策略和过滤重复请求
 app.use('/', (req, res, next) => {
-  // console.log('req',req.cookies)
   let modelName = null;
-  console.log('user',req.body.user)
 
   if (req.body && req.body.model) {
     modelName = req.body.model;
@@ -249,6 +331,43 @@ app.use('/', (req, res, next) => {
 
   // 获取该模型的所有限流中间件
   const rateLimitersForModel = rateLimiters[modelName];
+
+  // 格式化用户请求内容
+  const formattedRequestBody = JSON.stringify(req.body, null, 2);
+
+  // 发送飞书通知，包含格式化的用户请求内容
+  larkTweet({
+    modelName,
+    ip: req.body.user,
+    time: moment().format('YYYY-MM-DD HH:mm:ss'),
+  }, formattedRequestBody);
+
+  // 检查是否为 gemini-1.5-pro-latest 模型的请求
+  if (modelName === 'gemini-1.5-pro-latest') {
+    const requestContent = req.body.messages && req.body.messages[0] && req.body.messages[0].content;
+
+    // 检查请求内容是否包含特定字符串
+    if (requestContent && requestContent.includes('Переведи гороскоп на русский')) {
+      // 生成缓存键，可以使用用户 ID 或 IP 地址
+      const cacheKey = `${modelName}-${req.body.user}`;
+
+      // 检查缓存中是否存在相同的请求内容
+      if (recentRequestsCache.has(cacheKey)) {
+        console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Duplicate request detected and blocked for model: ${modelName}, user: ${req.body.user}`);
+        return res.status(401).json({
+          error: '非法请求，请稍后再试。',
+        });
+      }
+
+      // 将请求内容添加到缓存中
+      recentRequestsCache.set(cacheKey, true);
+
+      // 设置定时器，在过期时间后从缓存中删除请求内容
+      setTimeout(() => {
+        recentRequestsCache.delete(cacheKey);
+      }, cacheExpirationTimeMs);
+    }
+  }
 
   // 如果有针对该模型的限流配置，则依次应用所有限流中间件
   if (rateLimitersForModel) {
@@ -277,7 +396,7 @@ app.use('/', (req, res, next) => {
       }
     })();
   } else {
-    console.log(`No rate limiter for model: ${modelName || 'unknown'}`);
+    console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')}  No rate limiter for model: ${modelName || 'unknown'}`);
     next();
   }
 }, openAIProxy);
