@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2024-06-28 00:12:04
+ * @LastEditTime: 2024-06-29 07:52:03
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -46,7 +46,7 @@ const modelRateLimits = {
   },
   'gemini-1.5-pro-latest': {
     limits: [
-      { windowMs: 2 * 1000, max: 1 }, 
+      { windowMs: 3 * 1000, max: 1 }, 
       { windowMs: 60 * 1000, max: 4 }, 
       { windowMs: 30 * 60 * 1000, max: 20 }, 
       { windowMs: 3 * 60 * 60 * 1000, max: 100 }
@@ -55,7 +55,7 @@ const modelRateLimits = {
   },
   'gemini-1.5-flash-latest': {
     limits: [
-      { windowMs: 2 * 1000, max: 1 }, 
+      { windowMs: 2.5 * 1000, max: 1 }, 
       { windowMs: 60 * 1000, max: 4 }, 
       { windowMs: 30 * 60 * 1000, max: 25 }, 
       { windowMs: 3 * 60 * 60 * 1000, max: 100 }
@@ -292,7 +292,7 @@ for (const modelName in modelRateLimits) {
 
 // 创建代理中间件
 const openAIProxy = createProxyMiddleware({
-  target: 'https://api.liujiarong.top', // 替换为你的目标服务器地址
+  target: 'http://192.168.31.135:10245', // 替换为你的目标服务器地址
   changeOrigin: true,
   on: {
     proxyReq: fixRequestBody,
@@ -301,7 +301,7 @@ const openAIProxy = createProxyMiddleware({
 
 // 创建 /chatnio 路径的代理中间件
 const chatnioProxy = createProxyMiddleware({
-  target: 'https://api.liujiarong.top',
+  target: 'http://192.168.31.135:10245',
   changeOrigin: true,
   pathRewrite: {
     '^/chatnio': '/', // 移除 /chatnio 前缀
@@ -385,7 +385,7 @@ app.use('/', (req, res, next) => {
       const lastRequestTime = recentRequestContentHashes.get(requestContentHash);
       const timeDifference = currentTime - lastRequestTime;
 
-      if (timeDifference <= 3000) {
+      if (timeDifference <= 5000) {
         // 3 秒内出现相同请求内容
         console.log(
           `${moment().format(
