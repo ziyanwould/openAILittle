@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2024-06-29 07:52:03
+ * @LastEditTime: 2024-06-29 20:34:30
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -292,7 +292,7 @@ for (const modelName in modelRateLimits) {
 
 // 创建代理中间件
 const openAIProxy = createProxyMiddleware({
-  target: 'http://192.168.31.135:10245', // 替换为你的目标服务器地址
+  target: 'http://192.168.31.135:10243', // 替换为你的目标服务器地址
   changeOrigin: true,
   on: {
     proxyReq: fixRequestBody,
@@ -301,7 +301,7 @@ const openAIProxy = createProxyMiddleware({
 
 // 创建 /chatnio 路径的代理中间件
 const chatnioProxy = createProxyMiddleware({
-  target: 'http://192.168.31.135:10245',
+  target: 'http://192.168.31.135:10243',
   changeOrigin: true,
   pathRewrite: {
     '^/chatnio': '/', // 移除 /chatnio 前缀
@@ -376,8 +376,8 @@ app.use('/', (req, res, next) => {
   const requestContent = req.body.messages && req.body.messages[0] && req.body.messages[0].content;
 
   if (requestContent) {
-    // 使用 SHA-256 生成更独特的哈希值
-    const requestContentHash = crypto.createHash('sha256').update(requestContent).digest('hex');
+    const dataToHash = prepareDataForHashing(requestContent);
+    const requestContentHash = crypto.createHash('sha256').update(dataToHash).digest('hex');
 
     const currentTime = Date.now();
 
@@ -491,6 +491,30 @@ app.use('/', (req, res, next) => {
     next();
   }
 }, openAIProxy);
+
+
+// 辅助函数，用于准备数据进行哈希计算
+function prepareDataForHashing(data) {
+  if (typeof data === 'string') {
+    return data;
+  } else if (Buffer.isBuffer(data)) {
+    return data;
+  } else if (Array.isArray(data)) {
+    // 递归处理嵌套数组
+    return data.map(prepareDataForHashing).join('');
+  } else if (typeof data === 'object' && data !== null) {
+    // 处理其他对象类型，例如包含 base64 编码图片数据的对象
+    // 你需要根据实际情况修改这部分代码
+    if (data.type && data.type.startsWith('image/') && typeof data.data === 'string') {
+      return Buffer.from(data.data, 'base64');
+    } else {
+      return JSON.stringify(data);
+    }
+  } else {
+    // 处理其他数据类型
+    return String(data);
+  }
+}
 
 // 监听端口
 const PORT = 20491;
