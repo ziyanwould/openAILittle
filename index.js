@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2024-07-01 22:31:50
+ * @LastEditTime: 2024-07-01 22:50:26
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -502,37 +502,40 @@ app.use('/', (req, res, next) => {
   const formattedRequestBody = JSON.stringify(req.body, null, 2);
 
   // 检查是否为 些特定模型 比如 gemini-1.5-pro-latest 模型的请求
- // 遍历过滤配置
+  // 遍历过滤配置
  for (const config of Object.values(filterConfig)) {
-    const { modelName, filterString } = config;
+  const { modelName: filterModelName, filterString } = config;
 
-    // 检查是否为指定的模型
-    if (modelName === req.body.model) {
-      const requestContent = req.body.messages && req.body.messages[0] && req.body.messages[0].content;
+  // 检查请求内容是否包含特定字符串
+  const requestContent = req.body.messages && req.body.messages[0] && req.body.messages[0].content;
 
-      // 检查请求内容是否包含特定字符串
-      if (requestContent && requestContent.includes(filterString)) {
-        // 生成缓存键，可以使用用户 ID 或 IP 地址
-        const cacheKey = `${modelName}-${req.body.user}`;
+  if (requestContent && requestContent.includes(filterString)) {
+    // 生成缓存键，可以使用用户 ID 或 IP 地址
+    const cacheKey = `${filterModelName}-${req.body.user}`;
 
-        // 检查缓存中是否存在相同的请求内容
-        if (recentRequestsCache.has(cacheKey)) {
-          console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Duplicate request detected and blocked for model: ${modelName}, user: ${req.body.user}`);
-          return res.status(401).json({
-            error: '非法请求，请稍后再试。',
-          });
-        }
-
-        // 将请求内容添加到缓存中
-        recentRequestsCache.set(cacheKey, true);
-
-        // 设置定时器，在过期时间后从缓存中删除请求内容
-        setTimeout(() => {
-          recentRequestsCache.delete(cacheKey);
-        }, cacheExpirationTimeMs);
-      }
+    // 检查缓存中是否存在相同的请求内容
+    if (recentRequestsCache.has(cacheKey)) {
+      console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Duplicate request detected and blocked for model: ${filterModelName}, user: ${req.body.user}`);
+      return res.status(401).json({
+        error: '非法请求，请稍后再试。',
+      });
     }
+
+    // 将请求内容添加到缓存中
+    recentRequestsCache.set(cacheKey, true);
+
+    // 设置定时器，在过期时间后从缓存中删除请求内容
+    setTimeout(() => {
+      recentRequestsCache.delete(cacheKey);
+    }, cacheExpirationTimeMs);
+
+    // 如果匹配到过滤配置，则直接返回错误
+    return res.status(401).json({
+      error: '非法请求，请稍后再试。',
+    }); 
   }
+}
+
 
   // 如果有针对该模型的限流配置，则依次应用所有限流中间件
   if (rateLimitersForModel) {
