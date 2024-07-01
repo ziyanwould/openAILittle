@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2024-06-29 20:34:30
+ * @LastEditTime: 2024-07-01 22:31:50
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -15,11 +15,12 @@ const rateLimit = require('express-rate-limit');
 const bodyParser = require('body-parser');
 const moment = require('moment');
 const crypto = require('crypto'); // 引入 crypto 模块
+const fs = require('fs');
 
 // Node.js 18 以上版本支持原生的 fetch API
 const app = express();
 
-app.use(bodyParser.json({ limit: '30mb' }));
+app.use(bodyParser.json({ limit: '100mb' }));
 
 // 定义不同模型的多重限流配置
 const modelRateLimits = {
@@ -207,6 +208,61 @@ async function sendDingTalkMessage(message) {
   }
 }
 
+// 定义敏感词和黑名单文件路径
+const sensitiveWordsFilePath = 'Sensitive.txt'; // 可以是 .txt 或 .json
+const blacklistedUserIdsFilePath = 'BlacklistedUsers.txt'; // 可以是 .txt 或 .json
+
+// 初始化敏感词和黑名单
+let sensitiveWords = loadWordsFromFile(sensitiveWordsFilePath);
+let blacklistedUserIds = loadWordsFromFile(blacklistedUserIdsFilePath);
+
+// 定义配置文件路径
+const filterConfigFilePath = 'filterConfig.json'; 
+
+// 初始化过滤配置
+let filterConfig = loadFilterConfigFromFile(filterConfigFilePath);
+
+// 每 30 秒同步一次敏感词和黑名单
+setInterval(() => {
+  sensitiveWords = loadWordsFromFile(sensitiveWordsFilePath);
+  blacklistedUserIds = loadWordsFromFile(blacklistedUserIdsFilePath);
+  console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Sensitive words and blacklisted user IDs updated.`);
+  filterConfig = loadFilterConfigFromFile(filterConfigFilePath);
+  console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Filter config updated.`);
+}, 60 * 1000);
+
+// 定期清理缓存
+setInterval(() => {
+  recentRequestContentHashes.clear();
+}, 60 * 1000);
+
+// 从文件中加载敏感词或黑名单
+function loadWordsFromFile(filePath) {
+  try {
+    const fileContent = fs.readFileSync(filePath, 'utf-8');
+    // 根据文件类型解析内容
+    if (filePath.endsWith('.json')) {
+      return JSON.parse(fileContent);
+    } else { // 默认处理为 .txt，每行一个词，允许多个词用逗号分隔
+      return fileContent.split('\n').flatMap(line => line.split(',').map(word => word.trim()));
+    }
+  } catch (err) {
+    console.error(`Failed to load words from ${filePath}:`, err);
+    return [];
+  }
+}
+
+// 从文件中加载过滤配置
+function loadFilterConfigFromFile(filePath) {
+  try {
+    const fileContent = fs.readFileSync(filePath, 'utf-8');
+    return JSON.parse(fileContent);
+  } catch (err) {
+    console.error(`Failed to load filter config from ${filePath}:`, err);
+    return {};
+  }
+}
+
 // 创建限流中间件实例，并存储在对象中
 const rateLimiters = {};
 for (const modelName in modelRateLimits) {
@@ -324,6 +380,30 @@ const chatnioProxy = createProxyMiddleware({
   },
 });
 
+// 中间件函数，用于检查敏感词和黑名单用户
+app.use('/', (req, res, next) => {
+  const userId = req.body.user;
+  const requestContent = req.body.messages && req.body.messages[0] && req.body.messages[0].content;
+
+  // 检查用户 ID 是否在黑名单中
+  if (userId && blacklistedUserIds.includes(userId)) {
+    console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Request blocked for blacklisted user ID: ${userId}`);
+    return res.status(403).json({
+      error: '非法请求，请稍后再试。',
+    });
+  }
+
+  // 检查请求内容是否包含敏感词
+  if (requestContent && sensitiveWords.some(word => requestContent.includes(word))) {
+    console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Request blocked for sensitive content: ${requestContent}`);
+    return res.status(400).json({
+      error: '非法请求，请稍后再试。',
+    });
+  }
+
+  next();
+});
+
 // 应用 modifyRequestBodyMiddleware 中间件
 app.use(modifyRequestBodyMiddleware); 
 
@@ -354,7 +434,7 @@ app.use('/', (req, res, next) => {
           console.log(
             `${moment().format(
               'YYYY-MM-DD HH:mm:ss'
-            )} User ${userId} requested more than 2 models within 1.5 second.`
+            )} User ${userId} 同一用户短时间内发送不同模型请求`
           );
           return res.status(429).json({
             error: '请求过于频繁，请稍后再试。',
@@ -376,40 +456,37 @@ app.use('/', (req, res, next) => {
   const requestContent = req.body.messages && req.body.messages[0] && req.body.messages[0].content;
 
   if (requestContent) {
-    const dataToHash = prepareDataForHashing(requestContent);
-    const requestContentHash = crypto.createHash('sha256').update(dataToHash).digest('hex');
+    // 从请求内容中移除用于生成标题的部分
+    const titlePromptRegExp = /你是一名擅长会话的助理，你需要将用户的会话总结为 10 个字以内的标题/g;
+    const contentWithoutTitlePrompt = requestContent.replace(titlePromptRegExp, '').trim();
 
-    const currentTime = Date.now();
+    if (contentWithoutTitlePrompt !== '') {
+      const dataToHash = prepareDataForHashing(contentWithoutTitlePrompt);
+      const requestContentHash = crypto.createHash('sha256').update(dataToHash).digest('hex');
+      const currentTime = Date.now();
 
-    if (recentRequestContentHashes.has(requestContentHash)) {
-      const lastRequestTime = recentRequestContentHashes.get(requestContentHash);
-      const timeDifference = currentTime - lastRequestTime;
+      if (recentRequestContentHashes.has(requestContentHash)) {
+        const lastRequestTime = recentRequestContentHashes.get(requestContentHash);
+        const timeDifference = currentTime - lastRequestTime;
 
-      if (timeDifference <= 5000) {
-        // 3 秒内出现相同请求内容
-        console.log(
-          `${moment().format(
-            'YYYY-MM-DD HH:mm:ss'
-          )} Similar request detected and blocked.`
-        );
-        return res.status(429).json({
-          error: '请求过于频繁，请稍后再试。',
-        });
+        if (timeDifference <= 5000) {
+          console.log(
+            `${moment().format(
+              'YYYY-MM-DD HH:mm:ss'
+            )} 同一时间发送相同内容请求.`
+          );
+          return res.status(403).json({
+            error: '请求过于频繁，请稍后再试。',
+          });
+        }
       }
+
+      recentRequestContentHashes.set(requestContentHash, currentTime);
     }
-
-    // 更新缓存
-    recentRequestContentHashes.set(requestContentHash, currentTime);
-
-    // 定期清理缓存，例如每分钟清理一次
-    setInterval(() => {
-      recentRequestContentHashes.clear();
-    }, 60 * 1000);
   }
 
   next();
 });
-
 // 中间件函数，根据请求参数应用不同的限流策略和过滤重复请求
 app.use('/', (req, res, next) => {
   let modelName = null;
@@ -424,39 +501,36 @@ app.use('/', (req, res, next) => {
   // 格式化用户请求内容
   const formattedRequestBody = JSON.stringify(req.body, null, 2);
 
-  // 发送飞书通知，包含格式化的用户请求内容
-  if(modelName){
-    larkTweet({
-      modelName,
-      ip: req.ip,
-      userId: req.body.user,
-      time: moment().format('YYYY-MM-DD HH:mm:ss'),
-    }, formattedRequestBody);
-  }
-  // 检查是否为 gemini-1.5-pro-latest 模型的请求
-  if (modelName === 'gemini-1.5-pro-latest') {
-    const requestContent = req.body.messages && req.body.messages[0] && req.body.messages[0].content;
+  // 检查是否为 些特定模型 比如 gemini-1.5-pro-latest 模型的请求
+ // 遍历过滤配置
+ for (const config of Object.values(filterConfig)) {
+    const { modelName, filterString } = config;
 
-    // 检查请求内容是否包含特定字符串
-    if (requestContent && requestContent.includes('Переведи гороскоп на русский')) {
-      // 生成缓存键，可以使用用户 ID 或 IP 地址
-      const cacheKey = `${modelName}-${req.body.user}`;
+    // 检查是否为指定的模型
+    if (modelName === req.body.model) {
+      const requestContent = req.body.messages && req.body.messages[0] && req.body.messages[0].content;
 
-      // 检查缓存中是否存在相同的请求内容
-      if (recentRequestsCache.has(cacheKey)) {
-        console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Duplicate request detected and blocked for model: ${modelName}, user: ${req.body.user}`);
-        return res.status(401).json({
-          error: '非法请求，请稍后再试。',
-        });
+      // 检查请求内容是否包含特定字符串
+      if (requestContent && requestContent.includes(filterString)) {
+        // 生成缓存键，可以使用用户 ID 或 IP 地址
+        const cacheKey = `${modelName}-${req.body.user}`;
+
+        // 检查缓存中是否存在相同的请求内容
+        if (recentRequestsCache.has(cacheKey)) {
+          console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Duplicate request detected and blocked for model: ${modelName}, user: ${req.body.user}`);
+          return res.status(401).json({
+            error: '非法请求，请稍后再试。',
+          });
+        }
+
+        // 将请求内容添加到缓存中
+        recentRequestsCache.set(cacheKey, true);
+
+        // 设置定时器，在过期时间后从缓存中删除请求内容
+        setTimeout(() => {
+          recentRequestsCache.delete(cacheKey);
+        }, cacheExpirationTimeMs);
       }
-
-      // 将请求内容添加到缓存中
-      recentRequestsCache.set(cacheKey, true);
-
-      // 设置定时器，在过期时间后从缓存中删除请求内容
-      setTimeout(() => {
-        recentRequestsCache.delete(cacheKey);
-      }, cacheExpirationTimeMs);
     }
   }
 
@@ -490,6 +564,16 @@ app.use('/', (req, res, next) => {
     console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')}  No rate limiter for model: ${modelName || 'unknown'}  ip ${req.ip}`);
     next();
   }
+
+    // 发送飞书通知，包含格式化的用户请求内容
+    if(modelName){
+      larkTweet({
+        modelName,
+        ip: req.ip,
+        userId: req.body.user,
+        time: moment().format('YYYY-MM-DD HH:mm:ss'),
+      }, formattedRequestBody);
+    }
 }, openAIProxy);
 
 

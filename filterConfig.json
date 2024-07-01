@@ -1,0 +1,14 @@
+{
+    "filter1": {
+      "modelName": "gemini-1.5-pro-latest",
+      "filterString": "这是一个敏感短语"
+    },
+    "filter2": {
+      "modelName": "gpt-4-turbo",
+      "filterString": "另一个需要过滤的短语"
+    },
+    "filter3": {
+      "modelName": "Doubao-pro-4k",
+      "filterString": "禁止的内容"
+    }
+  }
