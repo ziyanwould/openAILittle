@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2024-07-01 22:50:26
+ * @LastEditTime: 2024-07-02 07:47:24
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -383,22 +383,32 @@ const chatnioProxy = createProxyMiddleware({
 // 中间件函数，用于检查敏感词和黑名单用户
 app.use('/', (req, res, next) => {
   const userId = req.body.user;
-  const requestContent = req.body.messages && req.body.messages[0] && req.body.messages[0].content;
+  const messages = req.body.messages || []; // 获取 messages 数组，如果不存在则设为空数组
 
-  // 检查用户 ID 是否在黑名单中
-  if (userId && blacklistedUserIds.includes(userId)) {
-    console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Request blocked for blacklisted user ID: ${userId}`);
-    return res.status(403).json({
-      error: '非法请求，请稍后再试。',
-    });
-  }
+  // 遍历 messages 数组
+  for (const message of messages) {
+    const requestContent = message.content;
 
-  // 检查请求内容是否包含敏感词
-  if (requestContent && sensitiveWords.some(word => requestContent.includes(word))) {
-    console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Request blocked for sensitive content: ${requestContent}`);
-    return res.status(400).json({
-      error: '非法请求，请稍后再试。',
-    });
+    // 检查用户 ID 是否在黑名单中
+    if (userId && blacklistedUserIds.includes(userId)) {
+      console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Request blocked for blacklisted user ID: ${userId}`);
+      return res.status(403).json({
+        error: '非法请求，请稍后再试。',
+      });
+    }
+
+    // 检查请求内容是否包含敏感词
+    if (requestContent && sensitiveWords.some(word => requestContent.includes(word))) {
+      console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Request blocked for sensitive content: ${requestContent}`);
+      return res.status(400).json({
+        error: '非法请求，请稍后再试。',
+      });
+    }
+
+    // 如果已经触发拦截逻辑，则跳出循环
+    if (res.headersSent) { 
+      break; 
+    }
   }
 
   next();
@@ -453,35 +463,45 @@ app.use('/', (req, res, next) => {
 
 // 中间件函数，用于限制不同用户短时间内发送相似请求
 app.use('/', (req, res, next) => {
-  const requestContent = req.body.messages && req.body.messages[0] && req.body.messages[0].content;
+  const messages = req.body.messages || []; // 获取 messages 数组，如果不存在则设为空数组
 
-  if (requestContent) {
-    // 从请求内容中移除用于生成标题的部分
-    const titlePromptRegExp = /你是一名擅长会话的助理，你需要将用户的会话总结为 10 个字以内的标题/g;
-    const contentWithoutTitlePrompt = requestContent.replace(titlePromptRegExp, '').trim();
+  // 遍历 messages 数组
+  for (const message of messages) {
+    const requestContent = message.content;
 
-    if (contentWithoutTitlePrompt !== '') {
-      const dataToHash = prepareDataForHashing(contentWithoutTitlePrompt);
-      const requestContentHash = crypto.createHash('sha256').update(dataToHash).digest('hex');
-      const currentTime = Date.now();
+    if (requestContent) {
+      // 从请求内容中移除用于生成标题的部分
+      const titlePromptRegExp = /你是一名擅长会话的助理，你需要将用户的会话总结为 10 个字以内的标题/g;
+      const contentWithoutTitlePrompt = requestContent.replace(titlePromptRegExp, '').trim();
 
-      if (recentRequestContentHashes.has(requestContentHash)) {
-        const lastRequestTime = recentRequestContentHashes.get(requestContentHash);
-        const timeDifference = currentTime - lastRequestTime;
+      if (contentWithoutTitlePrompt !== '') {
+        const dataToHash = prepareDataForHashing(contentWithoutTitlePrompt);
+        const requestContentHash = crypto.createHash('sha256').update(dataToHash).digest('hex');
+        const currentTime = Date.now();
 
-        if (timeDifference <= 5000) {
-          console.log(
-            `${moment().format(
-              'YYYY-MM-DD HH:mm:ss'
-            )} 同一时间发送相同内容请求.`
-          );
-          return res.status(403).json({
-            error: '请求过于频繁，请稍后再试。',
-          });
+        if (recentRequestContentHashes.has(requestContentHash)) {
+          const lastRequestTime = recentRequestContentHashes.get(requestContentHash);
+          const timeDifference = currentTime - lastRequestTime;
+
+          if (timeDifference <= 5000) {
+            console.log(
+              `${moment().format(
+                'YYYY-MM-DD HH:mm:ss'
+              )} 同一时间发送相同内容请求.`
+            );
+            return res.status(403).json({
+              error: '请求过于频繁，请稍后再试。',
+            });
+          }
         }
-      }
 
-      recentRequestContentHashes.set(requestContentHash, currentTime);
+        recentRequestContentHashes.set(requestContentHash, currentTime);
+      }
+    }
+
+    // 如果已经触发拦截逻辑，则跳出循环
+    if (res.headersSent) { 
+      break; 
     }
   }
 
