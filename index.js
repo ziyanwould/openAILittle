@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2024-07-01 22:50:26
+ * @LastEditTime: 2024-07-03 22:47:02
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -383,11 +383,10 @@ const chatnioProxy = createProxyMiddleware({
 // 中间件函数，用于检查敏感词和黑名单用户
 app.use('/', (req, res, next) => {
   const userId = req.body.user;
-  const messages = req.body.messages || []; // 获取 messages 数组，如果不存在则设为空数组
+  const messages = req.body.messages || [];
 
-  // 遍历 messages 数组
   for (const message of messages) {
-    const requestContent = message.content;
+    let requestContent = message.content;
 
     // 检查用户 ID 是否在黑名单中
     if (userId && blacklistedUserIds.includes(userId)) {
@@ -397,22 +396,45 @@ app.use('/', (req, res, next) => {
       });
     }
 
-    // 检查请求内容是否包含敏感词
-    if (requestContent && sensitiveWords.some(word => requestContent.includes(word))) {
-      console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Request blocked for sensitive content: ${requestContent}`);
+    // 检查并处理请求内容
+    if (requestContent) {
+      if (typeof requestContent !== 'string') {
+        try {
+          // 尝试将非字符串类型转换为字符串
+          requestContent = String(requestContent);
+        } catch (error) {
+          // 转换失败，记录错误并拒绝请求
+          console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Request blocked: Invalid request content. Cannot convert to string.`);
+          return res.status(400).json({
+            error: '非法请求，请稍后再试。',
+          });
+        }
+      }
+
+      // 对转换后的字符串进行敏感词检查
+      if (sensitiveWords.some(word => requestContent.includes(word))) {
+        console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Request blocked for sensitive content: ${requestContent}`);
+        return res.status(400).json({
+          error: '非法请求，请稍后再试。',
+        });
+      }
+    } else {
+      // 如果请求内容为空或其他无法处理的类型，拒绝请求
+      console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Request blocked: Empty or invalid request content.`);
       return res.status(400).json({
         error: '非法请求，请稍后再试。',
       });
     }
 
     // 如果已经触发拦截逻辑，则跳出循环
-    if (res.headersSent) { 
-      break; 
+    if (res.headersSent) {
+      break;
     }
   }
 
   next();
 });
+
 
 // 应用 modifyRequestBodyMiddleware 中间件
 app.use(modifyRequestBodyMiddleware); 
@@ -463,13 +485,26 @@ app.use('/', (req, res, next) => {
 
 // 中间件函数，用于限制不同用户短时间内发送相似请求
 app.use('/', (req, res, next) => {
-  const messages = req.body.messages || []; // 获取 messages 数组，如果不存在则设为空数组
+  const messages = req.body.messages || [];
 
-  // 遍历 messages 数组
   for (const message of messages) {
-    const requestContent = message.content;
+    let requestContent = message.content;
 
     if (requestContent) {
+      if (typeof requestContent !== 'string') {
+        try {
+          // 尝试将非字符串类型转换为字符串
+          requestContent = String(requestContent);
+        } catch (error) {
+          // 转换失败，记录错误并拒绝请求
+          console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Request blocked: Invalid request content. Cannot convert to string.`);
+          return res.status(400).json({
+            error: '非法请求，请稍后再试。',
+          });
+        }
+      }
+
+      // ... (使用转换后的 requestContent 字符串进行相似度检测)
       // 从请求内容中移除用于生成标题的部分
       const titlePromptRegExp = /你是一名擅长会话的助理，你需要将用户的会话总结为 10 个字以内的标题/g;
       const contentWithoutTitlePrompt = requestContent.replace(titlePromptRegExp, '').trim();
@@ -497,9 +532,15 @@ app.use('/', (req, res, next) => {
 
         recentRequestContentHashes.set(requestContentHash, currentTime);
       }
+    } else {
+      // 如果请求内容为空或其他无法处理的类型，拒绝请求
+      console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Request blocked: Empty or invalid request content.`);
+      return res.status(400).json({
+        error: '非法请求，请稍后再试。',
+      });
     }
 
-    // 如果已经触发拦截逻辑，则跳出循环
+     // 如果已经触发拦截逻辑，则跳出循环
     if (res.headersSent) { 
       break; 
     }
