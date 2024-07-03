@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2024-07-03 22:47:02
+ * @LastEditTime: 2024-07-04 00:45:14
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -234,7 +234,7 @@ setInterval(() => {
 // 定期清理缓存
 setInterval(() => {
   recentRequestContentHashes.clear();
-}, 60 * 1000);
+}, 30 * 60 * 1000);
 
 // 从文件中加载敏感词或黑名单
 function loadWordsFromFile(filePath) {
@@ -514,23 +514,36 @@ app.use('/', (req, res, next) => {
         const requestContentHash = crypto.createHash('sha256').update(dataToHash).digest('hex');
         const currentTime = Date.now();
 
+        // 检查缓存中是否存在相同的请求内容哈希值
         if (recentRequestContentHashes.has(requestContentHash)) {
-          const lastRequestTime = recentRequestContentHashes.get(requestContentHash);
-          const timeDifference = currentTime - lastRequestTime;
+          const existingRequest = recentRequestContentHashes.get(requestContentHash);
 
+          // 检查请求时间差是否在阈值内
+          const timeDifference = currentTime - existingRequest.timestamp;
+
+          // 根据实际情况调整时间窗口
           if (timeDifference <= 5000) {
             console.log(
-              `${moment().format(
-                'YYYY-MM-DD HH:mm:ss'
-              )} 同一时间发送相同内容请求.`
+              `${moment().format('YYYY-MM-DD HH:mm:ss')} 短时间内发送相同内容请求.`
             );
             return res.status(403).json({
               error: '请求过于频繁，请稍后再试。',
             });
+          } else {
+            // 更新 existingRequest 的时间戳
+            existingRequest.timestamp = currentTime;
           }
+        } else {
+          // 如果缓存中不存在该哈希值，则创建新的记录
+          recentRequestContentHashes.set(requestContentHash, {
+            timestamp: currentTime,
+          });
         }
 
-        recentRequestContentHashes.set(requestContentHash, currentTime);
+        // 设置定时器，在过期时间后从缓存中删除请求内容哈希值
+        setTimeout(() => {
+          recentRequestContentHashes.delete(requestContentHash);
+        }, cacheExpirationTimeMs);
       }
     } else {
       // 如果请求内容为空或其他无法处理的类型，拒绝请求
@@ -540,7 +553,7 @@ app.use('/', (req, res, next) => {
       });
     }
 
-     // 如果已经触发拦截逻辑，则跳出循环
+    // 如果已经触发拦截逻辑，则跳出循环
     if (res.headersSent) { 
       break; 
     }
