@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2024-07-04 00:45:14
+ * @LastEditTime: 2024-07-04 12:56:56
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -105,7 +105,7 @@ const auxiliaryModels = [
 // 为辅助模型设置限流配置
 auxiliaryModels.forEach(model => {
   modelRateLimits[model] = {
-    limits: [{ windowMs: 5 * 60 * 1000, max: 1 }],
+    limits: [{ windowMs: 10 * 60 * 1000, max: 5 }],
     dailyLimit: 200,
   };
 });
@@ -746,6 +746,7 @@ function isNaturalLanguage(text) {
   const languageRegexMap = {
     'english': /^[A-Za-z0-9,.!?\s]+$/, // 英文：字母、数字、标点符号和空格
     'chinese': /^[\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef0-9,.!?\s]+$/, // 中文：汉字、标点符号和空格
+    'chinese-english': /^[A-Za-z0-9\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef,.!?\s]+$/, // 中英文混合：字母、数字、汉字、标点符号和空格
     'spanish': /^[A-Za-z0-9áéíóúüñÁÉÍÓÚÜÑ,.!?\s]+$/, // 西班牙语：字母、数字、标点符号、特殊字符和空格
     'french': /^[A-Za-z0-9àâäçéèêëîïôöùûüÿœæÀÂÄÇÉÈÊËÎÏÔÖÙÛÜŸŒÆ,.!?\s]+$/, // 法语：字母、数字、标点符号、特殊字符和空格
     'german': /^[A-Za-z0-9äöüßÄÖÜẞ,.!?\s]+$/, // 德语：字母、数字、标点符号、特殊字符和空格
