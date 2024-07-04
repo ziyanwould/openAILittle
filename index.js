@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2024-07-04 12:56:56
+ * @LastEditTime: 2024-07-05 01:33:18
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -26,14 +26,14 @@ app.use(bodyParser.json({ limit: '100mb' }));
 const modelRateLimits = {
   'gpt-4-turbo': {
     limits: [
-      { windowMs: 1 * 60 * 1000, max: 1 }, 
+      { windowMs: 2 * 60 * 1000, max: 2 }, 
       { windowMs: 3 * 60 * 60 * 1000, max: 10 }, 
     ],
     dailyLimit: 120, // 例如，gpt-4-turbo 每天总限制 500 次
   },
   'gpt-4o': {
     limits: [
-      { windowMs: 1 * 60 * 1000, max: 1 }, 
+      { windowMs: 2 * 60 * 1000, max: 2 }, 
       { windowMs: 3 * 60 * 60 * 1000, max: 15 }, // 每分钟 1 次
     ],
     dailyLimit: 500, // 例如，gpt-4o 每天总限制 300 次
@@ -142,10 +142,8 @@ const modifyRequestBodyMiddleware = (req, res, next) => {
   next();
 };
 
-// 飞书通知函数
-async function larkTweet(data, requestBody) {
-  const webhookUrl = "https://open.feishu.cn/open-apis/bot/v2/hook/b99372d6-61f8-4fcc-bd6f-01689652fa08"; 
-
+// 定义飞书通知函数
+async function larkTweet(data, requestBody, webhookUrl='https://open.feishu.cn/open-apis/bot/v2/hook/b99372d6-61f8-4fcc-bd6f-01689652fa08') {
   try {
     const response = await fetch(webhookUrl, {
       method: "POST",
@@ -153,59 +151,28 @@ async function larkTweet(data, requestBody) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        msg_type: "post", 
+        msg_type: "post",
         content: {
           post: {
             zh_cn: {
-              title: "OpenAI 代理服务器转发请求", 
+              title: "AI 代理服务器转发请求",
               content: [
-                [
-                  {
-                    "tag": "text",
-                    "text": `模型：${data.modelName}`
-                  }
-                ],
-                [
-                  {
-                    "tag": "text",
-                    "text": `IP 地址：${data.ip}`
-                  }
-                ],
-                [
-                  {
-                    "tag": "text",
-                    "text": `用户 ID：${data.userId}`
-                  }
-                ],
-                [
-                  {
-                    "tag": "text",
-                    "text": `时间：${data.time}`
-                  }
-                ],
-                [
-                  {
-                    "tag": "text",
-                    "text": "用户请求内容："
-                  }
-                ],
-                [
-                  {
-                    "tag": "text",
-                    "text": `${requestBody}`
-                  }
-                ]
-              ]
-            }
-          }
-        }
+                [{ tag: "text", text: `模型：${data.modelName}` }],
+                [{ tag: "text", text: `IP 地址：${data.ip}` }],
+                [{ tag: "text", text: `用户 ID：${data.userId}` }],
+                [{ tag: "text", text: `时间：${data.time}` }],
+                [{ tag: "text", text: "用户请求内容：" }],
+                [{ tag: "text", text: `${requestBody}` }],
+              ],
+            },
+          },
+        },
       }),
     });
 
     if (!response.ok) {
       throw new Error(`Failed to send message to Lark: ${response.status} ${response.statusText}`);
     }
-
   } catch (error) {
     console.error('Failed to send rate limit notification to Lark:', error);
   }
@@ -386,6 +353,67 @@ const openAIProxy = createProxyMiddleware({
   },
 });
 
+const googleProxy = createProxyMiddleware({
+  target: 'https://proxyapi.liujiarong.top/google',
+  changeOrigin: true,
+  pathRewrite: {
+    '^/google': '/', // 正确的 pathRewrite 配置，移除 /google 前缀
+  },
+  on: {
+    proxyReq: (proxyReq, req, res) => {
+      // 合并 proxyReq 处理逻辑
+      fixRequestBody(proxyReq, req, res); // 确保 fixRequestBody 生效
+      console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Forwarding request to Google Proxy: ${req.method} ${proxyReq.path}`);
+      const userId = req.body.user;
+      let requestContent = '';
+
+      // 从 req.body.contents 中提取用户发送的内容
+      if (req.body.contents && Array.isArray(req.body.contents)) {
+        for (const contentItem of req.body.contents) {
+          if (contentItem.role === 'user' && contentItem.parts && Array.isArray(contentItem.parts)) {
+            for (const part of contentItem.parts) {
+              if (part.text) {
+                requestContent += part.text;
+              }
+            }
+          }
+        }
+      }
+
+      // 检查用户 ID 是否在黑名单中
+      if (userId && blacklistedUserIds.includes(userId)) {
+        console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Gemini request blocked for blacklisted user ID: ${userId}`);
+        return res.status(403).json({
+          error: '非法请求，请稍后再试。',
+        });
+      }
+
+      // 检查请求内容是否包含敏感词
+      if (sensitiveWords.some(word => requestContent.includes(word))) {
+        console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Gemini request blocked for sensitive content: ${requestContent}`);
+        return res.status(400).json({
+          error: '非法请求，请稍后再试。',
+        });
+      }
+
+      // 发送飞书通知
+      try {
+        const formattedRequestBody = JSON.stringify(req.body, null, 2);
+        const geminiWebhookUrl = 'https://open.feishu.cn/open-apis/bot/v2/hook/da771957-c1a4-4a91-88e4-08e6a6dfc73e'; // 替换为你的 Gemini 飞书 webhook 地址
+         larkTweet({
+          modelName: 'Gemini',
+          ip: req.ip,
+          userId: req.body.user,
+          time: moment().format('YYYY-MM-DD HH:mm:ss'),
+        }, formattedRequestBody, geminiWebhookUrl);
+      } catch (error) {
+        console.error('Failed to send notification to Lark:', error);
+      }
+    
+    },
+  },
+});
+
 // 创建 /chatnio 路径的代理中间件
 const chatnioProxy = createProxyMiddleware({
   target: 'http://192.168.31.135:10243',
@@ -410,6 +438,9 @@ const chatnioProxy = createProxyMiddleware({
     },
   },
 });
+
+// 应用 /google 代理中间件
+app.use('/google', googleProxy);
 
 // 中间件函数，用于检查敏感词和黑名单用户
 app.use('/', (req, res, next) => {
@@ -522,23 +553,28 @@ app.use('/', (req, res, next) => {
     let requestContent = message.content;
 
     if (requestContent) {
-      if (typeof requestContent !== 'string') {
-        try {
-          // 尝试将非字符串类型转换为字符串
-          requestContent = String(requestContent);
-        } catch (error) {
-          // 转换失败，记录错误并拒绝请求
-          console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Request blocked: Invalid request content. Cannot convert to string.`);
-          return res.status(400).json({
-            error: '非法请求，请稍后再试。',
-          });
-        }
-      }
-
+      // if (typeof requestContent !== 'string') {
+      //   try {
+      //     // 尝试将非字符串类型转换为字符串
+      //     requestContent = String(requestContent);
+      //   } catch (error) {
+      //     // 转换失败，记录错误并拒绝请求
+      //     console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Request blocked: Invalid request content. Cannot convert to string.`);
+      //     return res.status(400).json({
+      //       error: '非法请求，请稍后再试。',
+      //     });
+      //   }
+      // }
+       let contentWithoutTitlePrompt = null
       // ... (使用转换后的 requestContent 字符串进行相似度检测)
       // 从请求内容中移除用于生成标题的部分
-      const titlePromptRegExp = /你是一名擅长会话的助理，你需要将用户的会话总结为 10 个字以内的标题/g;
-      const contentWithoutTitlePrompt = requestContent.replace(titlePromptRegExp, '').trim();
+      if(typeof requestContent === 'string'){
+        const titlePromptRegExp = /你是一名擅长会话的助理，你需要将用户的会话总结为 10 个字以内的标题/g;
+         contentWithoutTitlePrompt = requestContent.replace(titlePromptRegExp, '').trim();
+      }else{
+         contentWithoutTitlePrompt = requestContent;
+      }
+     
 
       if (contentWithoutTitlePrompt !== '') {
         const dataToHash = prepareDataForHashing(contentWithoutTitlePrompt);
@@ -728,8 +764,10 @@ function prepareDataForHashing(data) {
   } else if (typeof data === 'object' && data !== null) {
     // 处理其他对象类型，例如包含 base64 编码图片数据的对象
     // 你需要根据实际情况修改这部分代码
-    if (data.type && data.type.startsWith('image/') && typeof data.data === 'string') {
-      return Buffer.from(data.data, 'base64');
+    if (data.type && data.type.startsWith('image') && typeof data.image_url.url === 'string') {
+      const str = data.image_url.url;
+      const base64Image = str.replace(/^data:image\/\w+;base64,/, '');
+      return base64Image;
     } else {
       return JSON.stringify(data);
     }
@@ -761,6 +799,12 @@ function isNaturalLanguage(text) {
       console.log(`Detected language: ${language}`);
       return true;
     }
+  }
+
+  // 如果不匹配任何一种语言，则判断是否为Markdown格式
+  // 这里只是一个简单的Markdown判断，可以根据需要进行更复杂的判断
+  if (text.includes('**') || text.includes('##') || text.includes('[link](url)')) {
+    return true;
   }
 
   // 如果没有匹配到任何语言，则认为不是自然语言
