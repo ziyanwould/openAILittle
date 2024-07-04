@@ -79,6 +79,37 @@ const modelRateLimits = {
   },
 };
 
+// 定义辅助模型列表
+const auxiliaryModels = [
+  'text-embedding-ada-002',
+  'text-embedding-3-small',
+  'text-embedding-3-large',
+  'text-curie-001',
+  'text-babbage-001',
+  'text-ada-001',
+  'text-davinci-002',
+  'text-davinci-003',
+  'text-moderation-latest',
+  'text-moderation-stable',
+  'text-davinci-edit-001',
+  'text-embedding-v1',
+  'davinci-002',
+  'babbage-002',
+  'whisper-1',
+  'tts-1',
+  'tts-1-1106',
+  'tts-1-hd',
+  'tts-1-hd-1106',
+];
+
+// 为辅助模型设置限流配置
+auxiliaryModels.forEach(model => {
+  modelRateLimits[model] = {
+    limits: [{ windowMs: 5 * 60 * 1000, max: 1 }],
+    dailyLimit: 200,
+  };
+});
+
 // 创建一个对象来存储每个模型每天的请求计数
 const dailyRequestCounts = {};
 
@@ -619,6 +650,29 @@ app.use('/', (req, res, next) => {
     }
   }
 
+  // 检查是否为辅助模型的请求，并进行自然语言判断
+  if (auxiliaryModels.includes(modelName)) {
+    // 只允许用户 ID 为 undefined 的请求访问辅助模型
+    if (req.body.user !== undefined) {
+      console.log(
+        `${moment().format('YYYY-MM-DD HH:mm:ss')}  Request blocked for model: ${modelName || 'unknown'}  ip ${req.ip}  user ID is not undefined`
+      );
+      return res.status(403).json({
+        error: '非法请求，请稍后再试。',
+      });
+    }
+
+    // 检查 input 是否存在且为自然语言
+    if (!req.body.input || !isNaturalLanguage(req.body.input)) {
+      console.log(
+        `${moment().format('YYYY-MM-DD HH:mm:ss')}  Request blocked for model: ${modelName || 'unknown'}  ip ${req.ip}  input is not natural language`
+      );
+      return res.status(400).json({
+        error: '非法请求，请稍后再试。',
+      });
+    }
+  }
+
   // 如果有针对该模型的限流配置，则依次应用所有限流中间件
   if (rateLimitersForModel) {
     console.log(`Applying rate limiters for model: ${modelName}`);
@@ -683,6 +737,33 @@ function prepareDataForHashing(data) {
     // 处理其他数据类型
     return String(data);
   }
+}
+
+// 简单判断是否为自然语言
+// 使用最多的8种语言做判断，特别是中文和英文，判断其语句是否完整，是否是自然语言。
+function isNaturalLanguage(text) {
+  // 定义支持的语言及其对应的正则表达式
+  const languageRegexMap = {
+    'english': /^[A-Za-z0-9,.!?\s]+$/, // 英文：字母、数字、标点符号和空格
+    'chinese': /^[\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef0-9,.!?\s]+$/, // 中文：汉字、标点符号和空格
+    'spanish': /^[A-Za-z0-9áéíóúüñÁÉÍÓÚÜÑ,.!?\s]+$/, // 西班牙语：字母、数字、标点符号、特殊字符和空格
+    'french': /^[A-Za-z0-9àâäçéèêëîïôöùûüÿœæÀÂÄÇÉÈÊËÎÏÔÖÙÛÜŸŒÆ,.!?\s]+$/, // 法语：字母、数字、标点符号、特殊字符和空格
+    'german': /^[A-Za-z0-9äöüßÄÖÜẞ,.!?\s]+$/, // 德语：字母、数字、标点符号、特殊字符和空格
+    'russian': /^[А-Яа-я0-9,.!?\s]+$/, // 俄语：西里尔字母、数字、标点符号和空格
+    'portuguese': /^[A-Za-z0-9áàâãçéèêíìîóòôõúùûüÁÀÂÃÇÉÈÊÍÌÎÓÒÔÕÚÙÛÜ,.!?\s]+$/, // 葡萄牙语：字母、数字、标点符号、特殊字符和空格
+    'arabic': /^[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\s]+$/, // 阿拉伯语：阿拉伯字符和空格
+  };
+
+  // 遍历支持的语言，检查文本是否匹配
+  for (const [language, regex] of Object.entries(languageRegexMap)) {
+    if (regex.test(text)) {
+      console.log(`Detected language: ${language}`);
+      return true;
+    }
+  }
+
+  // 如果没有匹配到任何语言，则认为不是自然语言
+  return false;
 }
 
 // 监听端口
