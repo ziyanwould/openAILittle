@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2024-07-05 01:33:18
+ * @LastEditTime: 2024-07-05 20:52:16
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -396,20 +396,21 @@ const googleProxy = createProxyMiddleware({
         });
       }
 
-      // 发送飞书通知
-      try {
-        const formattedRequestBody = JSON.stringify(req.body, null, 2);
-        const geminiWebhookUrl = 'https://open.feishu.cn/open-apis/bot/v2/hook/da771957-c1a4-4a91-88e4-08e6a6dfc73e'; // 替换为你的 Gemini 飞书 webhook 地址
-         larkTweet({
-          modelName: 'Gemini',
-          ip: req.ip,
-          userId: req.body.user,
-          time: moment().format('YYYY-MM-DD HH:mm:ss'),
-        }, formattedRequestBody, geminiWebhookUrl);
-      } catch (error) {
-        console.error('Failed to send notification to Lark:', error);
+      // 仅当请求未被拦截时才发送飞书通知
+      if (!res.headersSent) { 
+        try {
+          const formattedRequestBody = JSON.stringify(req.body, null, 2);
+          const geminiWebhookUrl = 'https://open.feishu.cn/open-apis/bot/v2/hook/da771957-c1a4-4a91-88e4-08e6a6dfc73e'; // 替换为你的 Gemini 飞书 webhook 地址
+          larkTweet({
+            modelName: 'Gemini',
+            ip: req.ip,
+            userId: req.body.user,
+            time: moment().format('YYYY-MM-DD HH:mm:ss'),
+          }, formattedRequestBody, geminiWebhookUrl);
+        } catch (error) {
+          console.error('Failed to send notification to Lark:', error);
+        }
       }
-    
     },
   },
 });
@@ -430,7 +431,12 @@ const chatnioProxy = createProxyMiddleware({
           // 格式化用户请求内容
           const formattedRequestBody = JSON.stringify(req.body, null, 2);
 
-          await sendDingTalkMessage(moment().format('YYYY-MM-DD HH:mm:ss')+'：'+formattedRequestBody);
+          await larkTweet({ // 使用 larkTweet 函数发送飞书通知
+            modelName: 'Chatnio',
+            ip: req.ip,
+            userId: req.body.user,
+            time: moment().format('YYYY-MM-DD HH:mm:ss'),
+          }, formattedRequestBody,'https://open.feishu.cn/open-apis/bot/v2/hook/8097380c-fb36-4af6-8e19-570c75ce84a1');
         } catch (error) {
           console.error('Failed to send notification to Lark:', error);
         }
@@ -439,8 +445,21 @@ const chatnioProxy = createProxyMiddleware({
   },
 });
 
-// 应用 /google 代理中间件
-app.use('/google', googleProxy);
+//  googleProxy 中间件添加限流
+const googleRateLimiter = rateLimit({
+  windowMs: 10 * 1000, // 10 秒时间窗口
+  max: 2, // 允许 1 次请求
+  keyGenerator: (req) => req.ip, // 使用 IP 地址作为限流键
+  handler: (req, res) => {
+    console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Gemini request from ${req.ip} has been rate limited.`);
+    res.status(429).json({
+      error: '请求过于频繁，请稍后再试。',
+    });
+  },
+});
+
+// 应用 googleRateLimiter 到 googleProxy
+app.use('/google', googleRateLimiter, googleProxy);
 
 // 中间件函数，用于检查敏感词和黑名单用户
 app.use('/', (req, res, next) => {
