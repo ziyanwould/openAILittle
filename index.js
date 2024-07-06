@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2024-07-05 20:52:16
+ * @LastEditTime: 2024-07-07 01:49:16
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -220,14 +220,21 @@ const filterConfigFilePath = 'filterConfig.json';
 // 初始化过滤配置
 let filterConfig = loadFilterConfigFromFile(filterConfigFilePath);
 
-// 每 30 秒同步一次敏感词和黑名单
+// 敏感形态的初始读取
+// 调用函数时，使用新的文件名
+let sensitivePatternsFile = 'sensitive_patterns.json'; 
+let sensitivePatterns = readSensitivePatternsFromFile(sensitivePatternsFile);
+
+// 每 120 秒同步一次敏感词和黑名单
 setInterval(() => {
   sensitiveWords = loadWordsFromFile(sensitiveWordsFilePath);
   blacklistedUserIds = loadWordsFromFile(blacklistedUserIdsFilePath);
   console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Sensitive words and blacklisted user IDs updated.`);
   filterConfig = loadFilterConfigFromFile(filterConfigFilePath);
   console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Filter config updated.`);
-}, 60 * 1000);
+  sensitivePatterns = readSensitivePatternsFromFile(sensitivePatternsFile);
+  console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')}  Reloading sensitive patterns...`);
+}, 2 * 60 * 1000);
 
 // 定期清理缓存
 setInterval(() => {
@@ -373,6 +380,55 @@ const googleProxy = createProxyMiddleware({
           if (contentItem.role === 'user' && contentItem.parts && Array.isArray(contentItem.parts)) {
             for (const part of contentItem.parts) {
               if (part.text) {
+
+                      // 检查请求内容是否与最近的请求相似
+                      if (part.text !== "") {
+                        
+                        const dataToHash = prepareDataForHashing(part.text);
+                        const requestContentHash = crypto
+                          .createHash("sha256")
+                          .update(dataToHash)
+                          .digest("hex");
+                        const currentTime = Date.now();
+
+                        // 检查缓存中是否存在相同的请求内容哈希值
+                        if (recentRequestContentHashes.has(requestContentHash)) {
+                          const existingRequest =
+                            recentRequestContentHashes.get(requestContentHash);
+
+                          // 检查请求时间差是否在阈值内
+                          const timeDifference = currentTime - existingRequest.timestamp;
+
+                          // 根据实际情况调整时间窗口
+                          if (timeDifference <= 5000) {
+                            console.log(
+                              `${moment().format(
+                                "YYYY-MM-DD HH:mm:ss"
+                              )} 短时间内发送相同内容请求.`
+                            );
+                            return res.status(403).json({
+                              error: "请求过于频繁，请稍后再试。",
+                            });
+                          } else {
+                            // 更新 existingRequest 的时间戳
+                            existingRequest.timestamp = currentTime;
+                          }
+                        } else {
+                          // 如果缓存中不存在该哈希值，则创建新的记录
+                          recentRequestContentHashes.set(requestContentHash, {
+                            timestamp: currentTime,
+                          });
+                        }
+                      } else {
+                        setTimeout(() => {
+                          recentRequestContentHashes.delete(requestContentHash);
+                        }, cacheExpirationTimeMs);
+                      }
+                      if (res.headersSent) { 
+                        break; 
+                        return false;
+                      }
+
                 requestContent += part.text;
               }
             }
@@ -395,6 +451,16 @@ const googleProxy = createProxyMiddleware({
           error: '非法请求，请稍后再试。',
         });
       }
+
+      /**正则过滤 */
+      const isSensitive = detectSensitiveContent(requestContent, sensitivePatterns);
+      if (isSensitive) {
+          console.log(moment().format('YYYY-MM-DD HH:mm:ss') + ":Google Sensitive content detected in text:", requestContent);
+          return res.status(400).json({
+            error: '非法请求，请稍后再试。',
+          });
+          // Handle the sensitive content here (e.g., block or filter)
+      } 
 
       // 仅当请求未被拦截时才发送飞书通知
       if (!res.headersSent) { 
@@ -447,7 +513,7 @@ const chatnioProxy = createProxyMiddleware({
 
 //  googleProxy 中间件添加限流
 const googleRateLimiter = rateLimit({
-  windowMs: 10 * 1000, // 10 秒时间窗口
+  windowMs: 1 * 1000, // 10 秒时间窗口
   max: 2, // 允许 1 次请求
   keyGenerator: (req) => req.ip, // 使用 IP 地址作为限流键
   handler: (req, res) => {
@@ -506,6 +572,16 @@ app.use('/', (req, res, next) => {
         error: '非法请求，请稍后再试。',
       });
     }
+
+    /**正则过滤 */
+    const isSensitive = detectSensitiveContent(requestContent, sensitivePatterns);
+    if (isSensitive) {
+        console.log(moment().format('YYYY-MM-DD HH:mm:ss') + ":Common Sensitive content detected in text:", requestContent);
+        return res.status(400).json({
+          error: '非法请求，请稍后再试。',
+        });
+        // Handle the sensitive content here (e.g., block or filter)
+    } 
 
     // 如果已经触发拦截逻辑，则跳出循环
     if (res.headersSent) {
@@ -827,6 +903,31 @@ function isNaturalLanguage(text) {
   }
 
   // 如果没有匹配到任何语言，则认为不是自然语言
+  return false;
+}
+
+// 从文件中读取敏感模式的函数
+function readSensitivePatternsFromFile(filename) {
+  try {
+    const data = fs.readFileSync(filename, 'utf8');
+    const patterns = JSON.parse(data).map(item => ({
+      pattern: new RegExp(item.pattern, 'g'),
+      description: item.description
+    }));
+    return patterns;
+  } catch (err) {
+    console.error(`Error reading file ${filename}:`, err);
+    return [];
+  }
+}
+
+// 使用模式检测敏感内容的功能
+function detectSensitiveContent(text, patterns) {
+  for (let i = 0; i < patterns.length; i++) { 
+    if (text.search(patterns[i].pattern) !== -1) {
+      return true; 
+    }
+  }
   return false;
 }
 
