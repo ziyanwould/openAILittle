@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2024-07-07 01:49:16
+ * @LastEditTime: 2024-07-08 23:57:11
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -43,7 +43,7 @@ const modelRateLimits = {
       { windowMs: 5 * 60 * 1000, max: 1 }, 
       { windowMs: 7 * 24 * 60 * 60 * 1000, max: 3 }, 
     ],
-    dailyLimit: 20, 
+    dailyLimit: 3, 
   },
   'gemini-1.5-pro-latest': {
     limits: [
@@ -513,16 +513,84 @@ const chatnioProxy = createProxyMiddleware({
 
 //  googleProxy 中间件添加限流
 const googleRateLimiter = rateLimit({
-  windowMs: 1 * 1000, // 10 秒时间窗口
-  max: 2, // 允许 1 次请求
+  windowMs: 10 * 60 * 1000, // 10 秒时间窗口
+  max: 3, // 允许 1 次请求
   keyGenerator: (req) => req.ip, // 使用 IP 地址作为限流键
   handler: (req, res) => {
     console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Gemini request from ${req.ip} has been rate limited.`);
-    res.status(429).json({
-      error: '请求过于频繁，请稍后再试。',
+    res.status(400).json({
+      error: '非法请求，请稍后再试。',
     });
   },
 });
+
+// 创建 /free/openai 路径的代理中间件，转发到 OpenAI，只发送飞书通知
+const freeOpenAIProxy = createProxyMiddleware({
+  target: 'http://192.168.31.135:10243',
+  changeOrigin: true,
+  pathRewrite: {
+    '^/freeopenai': '/', // 移除 /free/openai 前缀
+  },
+  on: {
+    proxyReq: fixRequestBody,
+    proxyRes: (proxyRes, req, res) => {
+      // 异步发送飞书通知
+      (async () => {
+        try {
+          // 格式化用户请求内容
+          const formattedRequestBody = JSON.stringify(req.body, null, 2);
+
+          await larkTweet({
+            modelName: 'Free OpenAI',
+            ip: req.ip,
+            userId: req.body.user,
+            time: moment().format('YYYY-MM-DD HH:mm:ss'),
+          }, formattedRequestBody);
+        } catch (error) {
+          console.error('Failed to send notification to Lark:', error);
+        }
+      })();
+    },
+  },
+});
+
+// 创建 /free/gemini 路径的代理中间件，转发到 Gemini，只发送飞书通知
+const freeGeminiProxy = createProxyMiddleware({
+  target: 'https://proxyapi.liujiarong.top/google', // 替换为你的 Gemini 代理目标地址
+  changeOrigin: true,
+  pathRewrite: {
+    '^/freegemini': '/', // 移除 /free/gemini 前缀
+  },
+  on: {
+    proxyReq: fixRequestBody,
+    proxyRes: (proxyRes, req, res) => {
+      // 异步发送飞书通知
+      (async () => {
+        try {
+          // 格式化用户请求内容
+          const formattedRequestBody = JSON.stringify(req.body, null, 2);
+
+          // 使用 Gemini 的飞书 webhook 地址
+          const geminiWebhookUrl = 'https://open.feishu.cn/open-apis/bot/v2/hook/da771957-c1a4-4a91-88e4-08e6a6dfc73e';
+          await larkTweet({
+            modelName: 'Free Gemini',
+            ip: req.ip,
+            userId: req.body.user,
+            time: moment().format('YYYY-MM-DD HH:mm:ss'),
+          }, formattedRequestBody, geminiWebhookUrl);
+        } catch (error) {
+          console.error('Failed to send notification to Lark:', error);
+        }
+      })();
+    },
+  },
+});
+
+// 应用 /free/openai 代理中间件
+app.use('/freeopenai', freeOpenAIProxy);
+
+// 应用 /free/gemini 代理中间件
+app.use('/freegemini', freeGeminiProxy);
 
 // 应用 googleRateLimiter 到 googleProxy
 app.use('/google', googleRateLimiter, googleProxy);
