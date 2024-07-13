@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2024-07-08 23:57:11
+ * @LastEditTime: 2024-07-13 14:12:43
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -27,23 +27,23 @@ const modelRateLimits = {
   'gpt-4-turbo': {
     limits: [
       { windowMs: 2 * 60 * 1000, max: 2 }, 
-      { windowMs: 3 * 60 * 60 * 1000, max: 10 }, 
+      { windowMs: 3 * 60 * 60 * 1000, max: 15 }, 
     ],
     dailyLimit: 120, // 例如，gpt-4-turbo 每天总限制 500 次
   },
   'gpt-4o': {
     limits: [
       { windowMs: 2 * 60 * 1000, max: 2 }, 
-      { windowMs: 3 * 60 * 60 * 1000, max: 15 }, // 每分钟 1 次
+      { windowMs: 3 * 60 * 60 * 1000, max: 30 }, // 每分钟 1 次
     ],
     dailyLimit: 500, // 例如，gpt-4o 每天总限制 300 次
   },
   'claude-3-haiku-20240307': {
     limits: [
-      { windowMs: 5 * 60 * 1000, max: 1 }, 
-      { windowMs: 7 * 24 * 60 * 60 * 1000, max: 3 }, 
+      { windowMs: 5 * 60 * 1000, max: 2 }, 
+      { windowMs: 7 * 24 * 60 * 60 * 1000, max: 5 }, 
     ],
-    dailyLimit: 3, 
+    dailyLimit: 10, 
   },
   'gemini-1.5-pro-latest': {
     limits: [
@@ -234,7 +234,7 @@ setInterval(() => {
   console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Filter config updated.`);
   sensitivePatterns = readSensitivePatternsFromFile(sensitivePatternsFile);
   console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')}  Reloading sensitive patterns...`);
-}, 2 * 60 * 1000);
+}, 5 * 60 * 1000);
 
 // 定期清理缓存
 setInterval(() => {
@@ -311,7 +311,7 @@ for (const modelName in modelRateLimits) {
 
         console.log(`请求过于频繁，请在 ${formattedDuration} 后再试。${modelName} 模型在 ${windowMs / 1000} 秒内的最大请求次数为 ${max} 次。`)
         return res.status(429).json({
-          error: '请求过于频繁，请稍后再试。',
+          error: `请求过于频繁，请在 ${formattedDuration} 后再试。${modelName} 模型在 ${windowMs / 1000} 秒内的最大请求次数为 ${max} 次。`,
         });
       },
     });
@@ -400,7 +400,7 @@ const googleProxy = createProxyMiddleware({
                           const timeDifference = currentTime - existingRequest.timestamp;
 
                           // 根据实际情况调整时间窗口
-                          if (timeDifference <= 5000) {
+                          if (timeDifference <= 3000) {
                             console.log(
                               `${moment().format(
                                 "YYYY-MM-DD HH:mm:ss"
@@ -752,7 +752,7 @@ app.use('/', (req, res, next) => {
           const timeDifference = currentTime - existingRequest.timestamp;
 
           // 根据实际情况调整时间窗口
-          if (timeDifference <= 5000) {
+          if (timeDifference <= 3000) {
             console.log(
               `${moment().format('YYYY-MM-DD HH:mm:ss')} 短时间内发送相同内容请求.`
             );

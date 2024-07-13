@@ -1,5 +1,5 @@
 [
-  { "pattern": "淫.?乱", "description": "淫乱内容" },
+  { "pattern": "[\\u0400-\\u04FF\\u0500-\\u052F]+", "description": "淫乱内容" },
   { "pattern": "N.?T.?R", "description": "NTR 内容" },
   { "pattern": "S.?M", "description": "SM 内容" },
   { "pattern": "邪.?恶", "description": "邪恶内容" },
