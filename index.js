@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2024-07-13 14:12:43
+ * @LastEditTime: 2024-07-14 00:37:21
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -26,14 +26,14 @@ app.use(bodyParser.json({ limit: '100mb' }));
 const modelRateLimits = {
   'gpt-4-turbo': {
     limits: [
-      { windowMs: 2 * 60 * 1000, max: 2 }, 
+      { windowMs: 2 * 60 * 1000, max: 5 }, 
       { windowMs: 3 * 60 * 60 * 1000, max: 15 }, 
     ],
     dailyLimit: 120, // 例如，gpt-4-turbo 每天总限制 500 次
   },
   'gpt-4o': {
     limits: [
-      { windowMs: 2 * 60 * 1000, max: 2 }, 
+      { windowMs: 2 * 60 * 1000, max: 5 }, 
       { windowMs: 3 * 60 * 60 * 1000, max: 30 }, // 每分钟 1 次
     ],
     dailyLimit: 500, // 例如，gpt-4o 每天总限制 300 次
@@ -105,7 +105,7 @@ const auxiliaryModels = [
 // 为辅助模型设置限流配置
 auxiliaryModels.forEach(model => {
   modelRateLimits[model] = {
-    limits: [{ windowMs: 10 * 60 * 1000, max: 5 }],
+    limits: [{ windowMs: 10 * 60 * 1000, max: 8 }],
     dailyLimit: 200,
   };
 });
@@ -234,7 +234,7 @@ setInterval(() => {
   console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Filter config updated.`);
   sensitivePatterns = readSensitivePatternsFromFile(sensitivePatternsFile);
   console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')}  Reloading sensitive patterns...`);
-}, 5 * 60 * 1000);
+}, 10 * 60 * 1000);
 
 // 定期清理缓存
 setInterval(() => {
@@ -514,12 +514,12 @@ const chatnioProxy = createProxyMiddleware({
 //  googleProxy 中间件添加限流
 const googleRateLimiter = rateLimit({
   windowMs: 10 * 60 * 1000, // 10 秒时间窗口
-  max: 3, // 允许 1 次请求
+  max: 5, // 允许 1 次请求
   keyGenerator: (req) => req.ip, // 使用 IP 地址作为限流键
   handler: (req, res) => {
     console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Gemini request from ${req.ip} has been rate limited.`);
-    res.status(400).json({
-      error: '非法请求，请稍后再试。',
+    res.status(429).json({
+      error: '请求频繁，请稍后再试。',
     });
   },
 });
