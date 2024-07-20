@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2024-07-14 00:37:21
+ * @LastEditTime: 2024-07-20 22:13:34
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -43,7 +43,7 @@ const modelRateLimits = {
       { windowMs: 5 * 60 * 1000, max: 2 }, 
       { windowMs: 7 * 24 * 60 * 60 * 1000, max: 5 }, 
     ],
-    dailyLimit: 10, 
+    dailyLimit: 5, 
   },
   'gemini-1.5-pro-latest': {
     limits: [
@@ -514,7 +514,7 @@ const chatnioProxy = createProxyMiddleware({
 //  googleProxy 中间件添加限流
 const googleRateLimiter = rateLimit({
   windowMs: 10 * 60 * 1000, // 10 秒时间窗口
-  max: 5, // 允许 1 次请求
+  max: 10, // 允许 1 次请求
   keyGenerator: (req) => req.ip, // 使用 IP 地址作为限流键
   handler: (req, res) => {
     console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Gemini request from ${req.ip} has been rate limited.`);
@@ -586,14 +586,17 @@ const freeGeminiProxy = createProxyMiddleware({
   },
 });
 
-// 应用 /free/openai 代理中间件
-app.use('/freeopenai', freeOpenAIProxy);
-
 // 应用 /free/gemini 代理中间件
 app.use('/freegemini', freeGeminiProxy);
 
 // 应用 googleRateLimiter 到 googleProxy
 app.use('/google', googleRateLimiter, googleProxy);
+
+// 应用 modifyRequestBodyMiddleware 中间件
+app.use(modifyRequestBodyMiddleware); 
+
+// 应用 /free/openai 代理中间件
+app.use('/freeopenai', freeOpenAIProxy);
 
 // 中间件函数，用于检查敏感词和黑名单用户
 app.use('/', (req, res, next) => {
@@ -659,10 +662,6 @@ app.use('/', (req, res, next) => {
 
   next();
 });
-
-
-// 应用 modifyRequestBodyMiddleware 中间件
-app.use(modifyRequestBodyMiddleware); 
 
 // 应用 /chatnio 代理中间件
 app.use('/chatnio', chatnioProxy);
@@ -823,7 +822,7 @@ app.use('/', (req, res, next) => {
         // 检查缓存中是否存在相同的请求内容
         if (recentRequestsCache.has(cacheKey)) {
           console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Duplicate request detected and blocked for model: ${filterModelName}, user: ${req.body.user}`);
-          return res.status(401).json({
+          return res.status(403).json({
             error: '非法请求，请稍后再试。',
           });
         }
@@ -837,7 +836,7 @@ app.use('/', (req, res, next) => {
         }, cacheExpirationTimeMs);
 
         // 如果匹配到过滤配置，则直接返回错误
-        return res.status(401).json({
+        return res.status(403).json({
           error: '非法请求，请稍后再试。',
         }); 
       }
@@ -866,7 +865,7 @@ app.use('/', (req, res, next) => {
       console.log(
         `${moment().format('YYYY-MM-DD HH:mm:ss')}  Request blocked for model: ${modelName || 'unknown'}  ip ${req.ip}  input is not natural language`
       );
-      return res.status(400).json({
+      return res.status(403).json({
         error: '非法请求，请稍后再试。',
       });
     }
