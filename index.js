@@ -2,8 +2,8 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2024-07-20 22:13:34
- * @FilePath: /openAILittle/index.js
+ * @LastEditTime: 2024-09-13 01:14:54
+ * @FilePath: /etherpad-lite/Users/liujiarong/fsdownload/index.js
  * @Description: 
  * @
  * @Copyright (c) 2024 by ${git_name_email}, All Rights Reserved. 
@@ -26,54 +26,54 @@ app.use(bodyParser.json({ limit: '100mb' }));
 const modelRateLimits = {
   'gpt-4-turbo': {
     limits: [
-      { windowMs: 2 * 60 * 1000, max: 5 }, 
-      { windowMs: 3 * 60 * 60 * 1000, max: 15 }, 
+      { windowMs: 2 * 60 * 1000, max: 5 },
+      { windowMs: 3 * 60 * 60 * 1000, max: 15 },
     ],
     dailyLimit: 120, // 例如，gpt-4-turbo 每天总限制 500 次
   },
   'gpt-4o': {
     limits: [
-      { windowMs: 2 * 60 * 1000, max: 5 }, 
+      { windowMs: 2 * 60 * 1000, max: 5 },
       { windowMs: 3 * 60 * 60 * 1000, max: 30 }, // 每分钟 1 次
     ],
     dailyLimit: 500, // 例如，gpt-4o 每天总限制 300 次
   },
   'claude-3-haiku-20240307': {
     limits: [
-      { windowMs: 5 * 60 * 1000, max: 2 }, 
-      { windowMs: 7 * 24 * 60 * 60 * 1000, max: 5 }, 
+      { windowMs: 5 * 60 * 1000, max: 2 },
+      { windowMs: 7 * 24 * 60 * 60 * 1000, max: 5 },
     ],
-    dailyLimit: 5, 
+    dailyLimit: 5,
   },
   'gemini-1.5-pro-latest': {
     limits: [
-      { windowMs: 3 * 1000, max: 1 }, 
-      { windowMs: 60 * 1000, max: 4 }, 
-      { windowMs: 30 * 60 * 1000, max: 20 }, 
+      { windowMs: 3 * 1000, max: 1 },
+      { windowMs: 60 * 1000, max: 4 },
+      { windowMs: 30 * 60 * 1000, max: 20 },
       { windowMs: 3 * 60 * 60 * 1000, max: 100 }
     ],
-    dailyLimit: 800, 
+    dailyLimit: 800,
   },
   'gemini-1.5-flash-latest': {
     limits: [
-      { windowMs: 2.5 * 1000, max: 1 }, 
-      { windowMs: 60 * 1000, max: 4 }, 
-      { windowMs: 30 * 60 * 1000, max: 25 }, 
+      { windowMs: 2.5 * 1000, max: 1 },
+      { windowMs: 60 * 1000, max: 4 },
+      { windowMs: 30 * 60 * 1000, max: 25 },
       { windowMs: 3 * 60 * 60 * 1000, max: 100 }
     ],
-    dailyLimit: 800, 
+    dailyLimit: 800,
   },
   'Doubao-pro-4k': {
     limits: [
-      { windowMs: 1 * 60 * 1000, max: 4 }, 
-      { windowMs: 30 * 60 * 1000, max: 30 }, 
+      { windowMs: 1 * 60 * 1000, max: 4 },
+      { windowMs: 30 * 60 * 1000, max: 30 },
     ],
     dailyLimit: 1500, // Doubao-pro-4k 每天总限制 500 次
   },
   'Doubao-pro-128k': {
     limits: [
-      { windowMs: 1 * 60 * 1000, max: 4 }, 
-      { windowMs: 30 * 60 * 1000, max: 30 }, 
+      { windowMs: 1 * 60 * 1000, max: 4 },
+      { windowMs: 30 * 60 * 1000, max: 30 },
     ],
     dailyLimit: 1500, // Doubao-pro-4k 每天总限制 500 次
   },
@@ -133,7 +133,7 @@ const modifyRequestBodyMiddleware = (req, res, next) => {
       if (req.body.top_p !== undefined && req.body.top_p < 1) {
         req.body.top_p = 0.5;
       }
-    } 
+    }
     // 匹配 "Baichuan" 开头的模型，区分大小写
     else if (req.body.model.startsWith("Baichuan")) {
       req.body.frequency_penalty = 1;
@@ -143,7 +143,7 @@ const modifyRequestBodyMiddleware = (req, res, next) => {
 };
 
 // 定义飞书通知函数
-async function larkTweet(data, requestBody, webhookUrl='https://open.feishu.cn/open-apis/bot/v2/hook/b99372d6-61f8-4fcc-bd6f-01689652fa08') {
+async function larkTweet(data, requestBody, webhookUrl = 'https://open.feishu.cn/open-apis/bot/v2/hook/b99372d6-61f8-4fcc-bd6f-01689652fa08') {
   try {
     const response = await fetch(webhookUrl, {
       method: "POST",
@@ -180,7 +180,7 @@ async function larkTweet(data, requestBody, webhookUrl='https://open.feishu.cn/o
 
 //钉钉
 async function sendDingTalkMessage(message) {
-  const webhookUrl = "https://oapi.dingtalk.com/robot/send?access_token=b24974e8baeb66e98b0325505e67a239860eade045056d541793e8a7daf3d2c6"; 
+  const webhookUrl = "https://oapi.dingtalk.com/robot/send?access_token=b24974e8baeb66e98b0325505e67a239860eade045056d541793e8a7daf3d2c6";
 
   try {
     const response = await fetch(webhookUrl, {
@@ -191,7 +191,7 @@ async function sendDingTalkMessage(message) {
       body: JSON.stringify({
         msgtype: "text",
         text: {
-          content: 'chatnio：'+message
+          content: 'chatnio：' + message
         }
       }),
     });
@@ -215,14 +215,14 @@ let sensitiveWords = loadWordsFromFile(sensitiveWordsFilePath);
 let blacklistedUserIds = loadWordsFromFile(blacklistedUserIdsFilePath);
 
 // 定义配置文件路径
-const filterConfigFilePath = 'filterConfig.json'; 
+const filterConfigFilePath = 'filterConfig.json';
 
 // 初始化过滤配置
 let filterConfig = loadFilterConfigFromFile(filterConfigFilePath);
 
 // 敏感形态的初始读取
 // 调用函数时，使用新的文件名
-let sensitivePatternsFile = 'sensitive_patterns.json'; 
+let sensitivePatternsFile = 'sensitive_patterns.json';
 let sensitivePatterns = readSensitivePatternsFromFile(sensitivePatternsFile);
 
 // 每 120 秒同步一次敏感词和黑名单
@@ -294,7 +294,7 @@ for (const modelName in modelRateLimits) {
           duration.hours() > 0 ? `${duration.hours()} 小时` : '',
           duration.minutes() > 0 ? `${duration.minutes()} 分钟` : '',
           duration.seconds() > 0 ? `${duration.seconds()} 秒` : '',
-        ].filter(Boolean).join(' '); 
+        ].filter(Boolean).join(' ');
 
         // 格式化用户请求内容
         const formattedRequestBody = JSON.stringify(req.body, null, 2);
@@ -341,7 +341,7 @@ for (const modelName in modelRateLimits) {
         max: dailyLimit
       }, formattedRequestBody);
 
-      return res.status(400).json({ 
+      return res.status(400).json({
         error: `今天${modelName} 模型总的请求次数已达上限，请明天再试。`
       });
     }
@@ -353,7 +353,7 @@ for (const modelName in modelRateLimits) {
 
 // 创建代理中间件
 const openAIProxy = createProxyMiddleware({
-  target: 'http://192.168.31.135:10243', // 替换为你的目标服务器地址
+  target: 'http://192.168.31.135:6092', // 替换为你的目标服务器地址
   changeOrigin: true,
   on: {
     proxyReq: fixRequestBody,
@@ -381,53 +381,53 @@ const googleProxy = createProxyMiddleware({
             for (const part of contentItem.parts) {
               if (part.text) {
 
-                      // 检查请求内容是否与最近的请求相似
-                      if (part.text !== "") {
-                        
-                        const dataToHash = prepareDataForHashing(part.text);
-                        const requestContentHash = crypto
-                          .createHash("sha256")
-                          .update(dataToHash)
-                          .digest("hex");
-                        const currentTime = Date.now();
+                // 检查请求内容是否与最近的请求相似
+                if (part.text !== "") {
 
-                        // 检查缓存中是否存在相同的请求内容哈希值
-                        if (recentRequestContentHashes.has(requestContentHash)) {
-                          const existingRequest =
-                            recentRequestContentHashes.get(requestContentHash);
+                  const dataToHash = prepareDataForHashing(part.text);
+                  const requestContentHash = crypto
+                    .createHash("sha256")
+                    .update(dataToHash)
+                    .digest("hex");
+                  const currentTime = Date.now();
 
-                          // 检查请求时间差是否在阈值内
-                          const timeDifference = currentTime - existingRequest.timestamp;
+                  // 检查缓存中是否存在相同的请求内容哈希值
+                  if (recentRequestContentHashes.has(requestContentHash)) {
+                    const existingRequest =
+                      recentRequestContentHashes.get(requestContentHash);
 
-                          // 根据实际情况调整时间窗口
-                          if (timeDifference <= 3000) {
-                            console.log(
-                              `${moment().format(
-                                "YYYY-MM-DD HH:mm:ss"
-                              )} 短时间内发送相同内容请求.`
-                            );
-                            return res.status(403).json({
-                              error: "请求过于频繁，请稍后再试。",
-                            });
-                          } else {
-                            // 更新 existingRequest 的时间戳
-                            existingRequest.timestamp = currentTime;
-                          }
-                        } else {
-                          // 如果缓存中不存在该哈希值，则创建新的记录
-                          recentRequestContentHashes.set(requestContentHash, {
-                            timestamp: currentTime,
-                          });
-                        }
-                      } else {
-                        setTimeout(() => {
-                          recentRequestContentHashes.delete(requestContentHash);
-                        }, cacheExpirationTimeMs);
-                      }
-                      if (res.headersSent) { 
-                        break; 
-                        return false;
-                      }
+                    // 检查请求时间差是否在阈值内
+                    const timeDifference = currentTime - existingRequest.timestamp;
+
+                    // 根据实际情况调整时间窗口
+                    if (timeDifference <= 3000) {
+                      console.log(
+                        `${moment().format(
+                          "YYYY-MM-DD HH:mm:ss"
+                        )} 短时间内发送相同内容请求.`
+                      );
+                      return res.status(403).json({
+                        error: "请求过于频繁，请稍后再试。",
+                      });
+                    } else {
+                      // 更新 existingRequest 的时间戳
+                      existingRequest.timestamp = currentTime;
+                    }
+                  } else {
+                    // 如果缓存中不存在该哈希值，则创建新的记录
+                    recentRequestContentHashes.set(requestContentHash, {
+                      timestamp: currentTime,
+                    });
+                  }
+                } else {
+                  setTimeout(() => {
+                    recentRequestContentHashes.delete(requestContentHash);
+                  }, cacheExpirationTimeMs);
+                }
+                if (res.headersSent) {
+                  break;
+                  return false;
+                }
 
                 requestContent += part.text;
               }
@@ -455,15 +455,15 @@ const googleProxy = createProxyMiddleware({
       /**正则过滤 */
       const isSensitive = detectSensitiveContent(requestContent, sensitivePatterns);
       if (isSensitive) {
-          console.log(moment().format('YYYY-MM-DD HH:mm:ss') + ":Google Sensitive content detected in text:", requestContent);
-          return res.status(400).json({
-            error: '非法请求，请稍后再试。',
-          });
-          // Handle the sensitive content here (e.g., block or filter)
-      } 
+        console.log(moment().format('YYYY-MM-DD HH:mm:ss') + ":Google Sensitive content detected in text:", requestContent);
+        return res.status(400).json({
+          error: '非法请求，请稍后再试。',
+        });
+        // Handle the sensitive content here (e.g., block or filter)
+      }
 
       // 仅当请求未被拦截时才发送飞书通知
-      if (!res.headersSent) { 
+      if (!res.headersSent) {
         try {
           const formattedRequestBody = JSON.stringify(req.body, null, 2);
           const geminiWebhookUrl = 'https://open.feishu.cn/open-apis/bot/v2/hook/da771957-c1a4-4a91-88e4-08e6a6dfc73e'; // 替换为你的 Gemini 飞书 webhook 地址
@@ -483,7 +483,7 @@ const googleProxy = createProxyMiddleware({
 
 // 创建 /chatnio 路径的代理中间件
 const chatnioProxy = createProxyMiddleware({
-  target: 'http://192.168.31.135:10243',
+  target: 'http://192.168.31.135:6092',
   changeOrigin: true,
   pathRewrite: {
     '^/chatnio': '/', // 移除 /chatnio 前缀
@@ -502,7 +502,7 @@ const chatnioProxy = createProxyMiddleware({
             ip: req.ip,
             userId: req.body.user,
             time: moment().format('YYYY-MM-DD HH:mm:ss'),
-          }, formattedRequestBody,'https://open.feishu.cn/open-apis/bot/v2/hook/8097380c-fb36-4af6-8e19-570c75ce84a1');
+          }, formattedRequestBody, 'https://open.feishu.cn/open-apis/bot/v2/hook/8097380c-fb36-4af6-8e19-570c75ce84a1');
         } catch (error) {
           console.error('Failed to send notification to Lark:', error);
         }
@@ -526,7 +526,7 @@ const googleRateLimiter = rateLimit({
 
 // 创建 /free/openai 路径的代理中间件，转发到 OpenAI，只发送飞书通知
 const freeOpenAIProxy = createProxyMiddleware({
-  target: 'http://192.168.31.135:10243',
+  target: 'http://192.168.31.135:6092',
   changeOrigin: true,
   pathRewrite: {
     '^/freeopenai': '/', // 移除 /free/openai 前缀
@@ -593,7 +593,7 @@ app.use('/freegemini', freeGeminiProxy);
 app.use('/google', googleRateLimiter, googleProxy);
 
 // 应用 modifyRequestBodyMiddleware 中间件
-app.use(modifyRequestBodyMiddleware); 
+app.use(modifyRequestBodyMiddleware);
 
 // 应用 /free/openai 代理中间件
 app.use('/freeopenai', freeOpenAIProxy);
@@ -602,6 +602,10 @@ app.use('/freeopenai', freeOpenAIProxy);
 app.use('/', (req, res, next) => {
   const userId = req.body.user;
   const messages = req.body.messages || [];
+  // 获取Authorization头部信息
+  const authorizationHeader = req.headers.authorization;
+  console.log('Authorization:', authorizationHeader);
+  console.log('req.body.user', req.body.user)
 
   for (const message of messages) {
     let requestContent = message.content;
@@ -647,12 +651,12 @@ app.use('/', (req, res, next) => {
     /**正则过滤 */
     const isSensitive = detectSensitiveContent(requestContent, sensitivePatterns);
     if (isSensitive) {
-        console.log(moment().format('YYYY-MM-DD HH:mm:ss') + ":Common Sensitive content detected in text:", requestContent);
-        return res.status(400).json({
-          error: '非法请求，请稍后再试。',
-        });
-        // Handle the sensitive content here (e.g., block or filter)
-    } 
+      console.log(moment().format('YYYY-MM-DD HH:mm:ss') + ":Common Sensitive content detected in text:", requestContent);
+      return res.status(400).json({
+        error: '非法请求，请稍后再试。',
+      });
+      // Handle the sensitive content here (e.g., block or filter)
+    }
 
     // 如果已经触发拦截逻辑，则跳出循环
     if (res.headersSent) {
@@ -727,16 +731,16 @@ app.use('/', (req, res, next) => {
       //     });
       //   }
       // }
-       let contentWithoutTitlePrompt = null
+      let contentWithoutTitlePrompt = null
       // ... (使用转换后的 requestContent 字符串进行相似度检测)
       // 从请求内容中移除用于生成标题的部分
-      if(typeof requestContent === 'string'){
+      if (typeof requestContent === 'string') {
         const titlePromptRegExp = /你是一名擅长会话的助理，你需要将用户的会话总结为 10 个字以内的标题/g;
-         contentWithoutTitlePrompt = requestContent.replace(titlePromptRegExp, '').trim();
-      }else{
-         contentWithoutTitlePrompt = requestContent;
+        contentWithoutTitlePrompt = requestContent.replace(titlePromptRegExp, '').trim();
+      } else {
+        contentWithoutTitlePrompt = requestContent;
       }
-     
+
 
       if (contentWithoutTitlePrompt !== '') {
         const dataToHash = prepareDataForHashing(contentWithoutTitlePrompt);
@@ -783,8 +787,8 @@ app.use('/', (req, res, next) => {
     }
 
     // 如果已经触发拦截逻辑，则跳出循环
-    if (res.headersSent) { 
-      break; 
+    if (res.headersSent) {
+      break;
     }
   }
 
@@ -838,12 +842,12 @@ app.use('/', (req, res, next) => {
         // 如果匹配到过滤配置，则直接返回错误
         return res.status(403).json({
           error: '非法请求，请稍后再试。',
-        }); 
+        });
       }
 
       // 如果已经触发拦截逻辑，则跳出循环
-      if (res.headersSent) { 
-        break; 
+      if (res.headersSent) {
+        break;
       }
     }
   }
@@ -878,11 +882,11 @@ app.use('/', (req, res, next) => {
     // 使用 Promise.all 和 async/await 依次执行所有限流中间件
     (async () => {
       try {
-        await Promise.all(rateLimitersForModel.map(limiter => 
+        await Promise.all(rateLimitersForModel.map(limiter =>
           new Promise((resolve, reject) => {
             limiter(req, res, (err) => {
               if (err) {
-                reject(err); 
+                reject(err);
               } else {
                 resolve();
               }
@@ -890,7 +894,7 @@ app.use('/', (req, res, next) => {
           })
         ));
         // 所有限流中间件都执行成功，继续执行下一个中间件
-        next(); 
+        next();
       } catch (err) {
         // 捕获限流中间件抛出的错误
         // 这里不需要做任何处理，因为错误已经被处理过了
@@ -902,15 +906,15 @@ app.use('/', (req, res, next) => {
     next();
   }
 
-    // 发送飞书通知，包含格式化的用户请求内容
-    if(modelName){
-      larkTweet({
-        modelName,
-        ip: req.ip,
-        userId: req.body.user,
-        time: moment().format('YYYY-MM-DD HH:mm:ss'),
-      }, formattedRequestBody);
-    }
+  // 发送飞书通知，包含格式化的用户请求内容
+  if (modelName) {
+    larkTweet({
+      modelName,
+      ip: req.ip,
+      userId: req.body.user,
+      time: moment().format('YYYY-MM-DD HH:mm:ss'),
+    }, formattedRequestBody);
+  }
 }, openAIProxy);
 
 
@@ -990,9 +994,9 @@ function readSensitivePatternsFromFile(filename) {
 
 // 使用模式检测敏感内容的功能
 function detectSensitiveContent(text, patterns) {
-  for (let i = 0; i < patterns.length; i++) { 
+  for (let i = 0; i < patterns.length; i++) {
     if (text.search(patterns[i].pattern) !== -1) {
-      return true; 
+      return true;
     }
   }
   return false;
