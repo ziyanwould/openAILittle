@@ -402,7 +402,7 @@ const googleProxy = createProxyMiddleware({
                     // 根据实际情况调整时间窗口
                     if (timeDifference <= 3000) {
                       console.log(
-                        `${moment().format(
+                        `google路由：${moment().format(
                           "YYYY-MM-DD HH:mm:ss"
                         )} 短时间内发送相同内容请求.`
                       );
@@ -757,7 +757,7 @@ app.use('/', (req, res, next) => {
           // 根据实际情况调整时间窗口
           if (timeDifference <= 3000) {
             console.log(
-              `${moment().format('YYYY-MM-DD HH:mm:ss')} 短时间内发送相同内容请求.`
+              `主路由：${moment().format('YYYY-MM-DD HH:mm:ss')} 短时间内发送相同内容请求.`
             );
             return res.status(403).json({
               error: '请求过于频繁，请稍后再试。',
