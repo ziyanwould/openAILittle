@@ -2,8 +2,8 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2024-09-13 01:14:54
- * @FilePath: /etherpad-lite/Users/liujiarong/fsdownload/index.js
+ * @LastEditTime: 2024-11-24 18:58:58
+ * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
  * @Copyright (c) 2024 by ${git_name_email}, All Rights Reserved. 
@@ -142,6 +142,26 @@ const modifyRequestBodyMiddleware = (req, res, next) => {
   next();
 };
 
+// 中间件函数，用于限制 req.body 文本长度
+const limitRequestBodyLength = (maxLength = 10000, errorMessage = '请求文本过长，请缩短后再试。') => {
+  return (req, res, next) => {
+    const messages = req.body.messages || [];
+    let totalLength = 0;
+    for (const message of messages) {
+      if (message.content) {
+        totalLength += String(message.content).length;
+      }
+      if (totalLength > maxLength) {
+        console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Request blocked: Text length exceeds limit.`);
+        return res.status(400).json({ error: errorMessage });
+      }
+    }
+    next();
+  };
+};
+// 应用文本长度限制中间件到 "/" 和 "/google" 路由
+const defaultLengthLimiter = limitRequestBodyLength();
+
 // 定义飞书通知函数
 async function larkTweet(data, requestBody, webhookUrl = 'https://open.feishu.cn/open-apis/bot/v2/hook/b99372d6-61f8-4fcc-bd6f-01689652fa08') {
   try {
@@ -278,9 +298,9 @@ for (const modelName in modelRateLimits) {
       windowMs,
       max,
       keyGenerator: (req) => {
-        const ip = req.ip;
+        const ip = req.headers['x-user-ip'] || req.ip;
         const userAgent = req.headers['user-agent'];
-        const userId = req.body.user;
+        const userId = req.headers['x-user-id'] || req.body.user;
         const key = `${modelName}-${ip}-${userAgent}-${userId}`;
         console.log(`Rate limiting key: ${key}`);
         return key;
@@ -302,7 +322,7 @@ for (const modelName in modelRateLimits) {
         // 发送飞书通知，包含格式化的用户请求内容
         larkTweet({
           modelName,
-          ip: req.body.user,
+          ip: req.headers['x-user-ip'] || req.body.user,
           time: moment().format('YYYY-MM-DD HH:mm:ss'),
           duration: formattedDuration,
           windowMs,
@@ -334,7 +354,7 @@ for (const modelName in modelRateLimits) {
       // 发送飞书通知，包含格式化的用户请求内容
       larkTweet({
         modelName,
-        ip: req.body.user,
+        ip: req.headers['x-user-ip'] || req.ip,
         time: moment().format('YYYY-MM-DD HH:mm:ss'),
         duration: '24 小时', // 每日限制，所以持续时间为 24 小时
         windowMs: 24 * 60 * 60 * 1000, // 24 小时对应的毫秒数
@@ -371,7 +391,8 @@ const googleProxy = createProxyMiddleware({
       // 合并 proxyReq 处理逻辑
       fixRequestBody(proxyReq, req, res); // 确保 fixRequestBody 生效
       console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Forwarding request to Google Proxy: ${req.method} ${proxyReq.path}`);
-      const userId = req.body.user;
+      const userId = req.headers['x-user-id'] || 'unknow';
+       console.log('userId',userId)
       let requestContent = '';
 
       // 从 req.body.contents 中提取用户发送的内容
@@ -469,8 +490,8 @@ const googleProxy = createProxyMiddleware({
           const geminiWebhookUrl = 'https://open.feishu.cn/open-apis/bot/v2/hook/da771957-c1a4-4a91-88e4-08e6a6dfc73e'; // 替换为你的 Gemini 飞书 webhook 地址
           larkTweet({
             modelName: 'Gemini',
-            ip: req.ip,
-            userId: req.body.user,
+            ip: req.headers['x-user-ip'] || req.ip,
+            userId: req.headers['x-user-id'] || req.userId,
             time: moment().format('YYYY-MM-DD HH:mm:ss'),
           }, formattedRequestBody, geminiWebhookUrl);
         } catch (error) {
@@ -499,8 +520,8 @@ const chatnioProxy = createProxyMiddleware({
 
           await larkTweet({ // 使用 larkTweet 函数发送飞书通知
             modelName: 'Chatnio',
-            ip: req.ip,
-            userId: req.body.user,
+            ip: req.body.user_ip || req.headers['x-user-ip'] || req.ip,
+            userId: req.body.user || req.headers['x-user-id'],
             time: moment().format('YYYY-MM-DD HH:mm:ss'),
           }, formattedRequestBody, 'https://open.feishu.cn/open-apis/bot/v2/hook/8097380c-fb36-4af6-8e19-570c75ce84a1');
         } catch (error) {
@@ -515,7 +536,7 @@ const chatnioProxy = createProxyMiddleware({
 const googleRateLimiter = rateLimit({
   windowMs: 10 * 60 * 1000, // 10 秒时间窗口
   max: 10, // 允许 1 次请求
-  keyGenerator: (req) => req.ip, // 使用 IP 地址作为限流键
+  keyGenerator: (req) => req.headers['x-user-ip'] || req.ip, // 使用 IP 地址作为限流键
   handler: (req, res) => {
     console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Gemini request from ${req.ip} has been rate limited.`);
     res.status(429).json({
@@ -539,11 +560,10 @@ const freeOpenAIProxy = createProxyMiddleware({
         try {
           // 格式化用户请求内容
           const formattedRequestBody = JSON.stringify(req.body, null, 2);
-
           await larkTweet({
             modelName: 'Free OpenAI',
-            ip: req.ip,
-            userId: req.body.user,
+            ip: req.headers['x-user-ip'] || req.ip,
+            userId: req.headers['x-user-id'] || req.body.user,
             time: moment().format('YYYY-MM-DD HH:mm:ss'),
           }, formattedRequestBody);
         } catch (error) {
@@ -574,8 +594,8 @@ const freeGeminiProxy = createProxyMiddleware({
           const geminiWebhookUrl = 'https://open.feishu.cn/open-apis/bot/v2/hook/da771957-c1a4-4a91-88e4-08e6a6dfc73e';
           await larkTweet({
             modelName: 'Free Gemini',
-            ip: req.ip,
-            userId: req.body.user,
+            ip: req.headers['x-user-ip'] || req.ip,
+            userId: req.headers['x-user-id'] || req.body.user,
             time: moment().format('YYYY-MM-DD HH:mm:ss'),
           }, formattedRequestBody, geminiWebhookUrl);
         } catch (error) {
@@ -590,7 +610,7 @@ const freeGeminiProxy = createProxyMiddleware({
 app.use('/freegemini', freeGeminiProxy);
 
 // 应用 googleRateLimiter 到 googleProxy
-app.use('/google', googleRateLimiter, googleProxy);
+app.use('/google', defaultLengthLimiter, googleRateLimiter, googleProxy);
 
 // 应用 modifyRequestBodyMiddleware 中间件
 app.use(modifyRequestBodyMiddleware);
@@ -600,12 +620,12 @@ app.use('/freeopenai', freeOpenAIProxy);
 
 // 中间件函数，用于检查敏感词和黑名单用户
 app.use('/', (req, res, next) => {
-  const userId = req.body.user;
+  const userId = req.body.user || req.headers['x-user-id'];
   const messages = req.body.messages || [];
   // 获取Authorization头部信息
   const authorizationHeader = req.headers.authorization;
   console.log('Authorization:', authorizationHeader);
-  console.log('req.body.user', req.body.user)
+  console.log('req.body.user', req.headers['x-user-id'] || req.body.user)
 
   for (const message of messages) {
     let requestContent = message.content;
@@ -667,12 +687,27 @@ app.use('/', (req, res, next) => {
   next();
 });
 
+// 应用文本长度限制中间件到 "/chatnio" 路由，根据用户 ID 动态设置最大长度
+app.use('/chatnio', (req, res, next) => {
+  const userId = req.body.user || req.headers['x-user-id'];
+  if (userId && isTimestamp(userId)) { 
+      // 时间戳格式的用户 ID，视为未登录用户
+      limitRequestBodyLength(4096, '未登录用户请求文本过长，请登录后再试。')(req, res, next);
+  } else {
+      // 其他用户 ID，视为已登录用户
+      limitRequestBodyLength(50000, '登录用户请求文本过长，请缩短后再试。')(req, res, next);
+  }
+});
+
 // 应用 /chatnio 代理中间件
 app.use('/chatnio', chatnioProxy);
 
+// 限制请求体长度
+app.use('/', defaultLengthLimiter);
+
 // 中间件函数，用于限制同一用户短时间内请求多个模型
 app.use('/', (req, res, next) => {
-  const userId = req.body.user;
+  const userId = req.headers['x-user-id'] || req.body.user;
   const modelName = req.body.model;
   const currentTime = Date.now();
 
@@ -821,7 +856,7 @@ app.use('/', (req, res, next) => {
 
       if (requestContent && requestContent.includes(filterString)) {
         // 生成缓存键，可以使用用户 ID 或 IP 地址
-        const cacheKey = `${filterModelName}-${req.body.user}`;
+        const cacheKey = `${filterModelName}-${req.body.user || req.headers['x-user-id']}`;
 
         // 检查缓存中是否存在相同的请求内容
         if (recentRequestsCache.has(cacheKey)) {
@@ -910,8 +945,8 @@ app.use('/', (req, res, next) => {
   if (modelName) {
     larkTweet({
       modelName,
-      ip: req.ip,
-      userId: req.body.user,
+      ip: req.headers['x-user-ip'] || req.ip,
+      userId: req.headers['x-user-id'] || req.body.user,
       time: moment().format('YYYY-MM-DD HH:mm:ss'),
     }, formattedRequestBody);
   }
@@ -1001,6 +1036,21 @@ function detectSensitiveContent(text, patterns) {
   }
   return false;
 }
+
+// 辅助函数，用于检查字符串是否为时间戳格式，并允许一定的误差
+function isTimestamp(str, allowedErrorMs = 5 * 60 * 1000) {
+  try {
+      const timestamp = parseInt(str, 10);
+      if (isNaN(timestamp)) {
+          return false;
+      }
+      const currentTime = Date.now();
+      return Math.abs(currentTime - timestamp) <= allowedErrorMs;
+  } catch (error) {
+      return false;
+  }
+}
+
 
 // 监听端口
 const PORT = 20491;
