@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2024-11-24 18:58:58
+ * @LastEditTime: 2024-11-26 22:17:32
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -24,19 +24,41 @@ app.use(bodyParser.json({ limit: '100mb' }));
 
 // 定义不同模型的多重限流配置
 const modelRateLimits = {
+  'gpt-4o-mini': {
+    limits: [
+      { windowMs: 2 * 60 * 1000, max: 5 },
+      { windowMs: 30 * 60 * 1000, max: 30 },
+      { windowMs: 3 * 60 * 60 * 1000, max: 200 },
+    ],
+    dailyLimit: 300, // 例如，gpt-4-turbo 每天总限制 500 次
+  },
+  'o1-mini': {
+    limits: [
+      { windowMs: 2 * 60 * 1000, max: 5 },
+      { windowMs: 3 * 60 * 60 * 1000, max: 15 },
+    ],
+    dailyLimit: 20, // 例如，gpt-4-turbo 每天总限制 500 次
+  },
+  'o1-preview': {
+    limits: [
+      { windowMs: 2 * 60 * 1000, max: 5 },
+      { windowMs: 3 * 60 * 60 * 1000, max: 15 },
+    ],
+    dailyLimit: 20, // 例如，gpt-4-turbo 每天总限制 500 次
+  },
   'gpt-4-turbo': {
     limits: [
       { windowMs: 2 * 60 * 1000, max: 5 },
       { windowMs: 3 * 60 * 60 * 1000, max: 15 },
     ],
-    dailyLimit: 120, // 例如，gpt-4-turbo 每天总限制 500 次
+    dailyLimit: 30, // 例如，gpt-4-turbo 每天总限制 500 次
   },
   'gpt-4o': {
     limits: [
       { windowMs: 2 * 60 * 1000, max: 5 },
       { windowMs: 3 * 60 * 60 * 1000, max: 30 }, // 每分钟 1 次
     ],
-    dailyLimit: 500, // 例如，gpt-4o 每天总限制 300 次
+    dailyLimit: 30, // 例如，gpt-4o 每天总限制 300 次
   },
   'claude-3-haiku-20240307': {
     limits: [
@@ -52,7 +74,7 @@ const modelRateLimits = {
       { windowMs: 30 * 60 * 1000, max: 20 },
       { windowMs: 3 * 60 * 60 * 1000, max: 100 }
     ],
-    dailyLimit: 800,
+    dailyLimit: 120,
   },
   'gemini-1.5-flash-latest': {
     limits: [
@@ -61,21 +83,21 @@ const modelRateLimits = {
       { windowMs: 30 * 60 * 1000, max: 25 },
       { windowMs: 3 * 60 * 60 * 1000, max: 100 }
     ],
-    dailyLimit: 800,
+    dailyLimit: 120,
   },
   'Doubao-pro-4k': {
     limits: [
       { windowMs: 1 * 60 * 1000, max: 4 },
       { windowMs: 30 * 60 * 1000, max: 30 },
     ],
-    dailyLimit: 1500, // Doubao-pro-4k 每天总限制 500 次
+    dailyLimit: 120, // Doubao-pro-4k 每天总限制 120 次
   },
   'Doubao-pro-128k': {
     limits: [
       { windowMs: 1 * 60 * 1000, max: 4 },
       { windowMs: 30 * 60 * 1000, max: 30 },
     ],
-    dailyLimit: 1500, // Doubao-pro-4k 每天总限制 500 次
+    dailyLimit: 120, // Doubao-pro-4k 每天总限制 120 次
   },
 };
 
@@ -143,7 +165,7 @@ const modifyRequestBodyMiddleware = (req, res, next) => {
 };
 
 // 中间件函数，用于限制 req.body 文本长度
-const limitRequestBodyLength = (maxLength = 10000, errorMessage = '请求文本过长，请缩短后再试。') => {
+const limitRequestBodyLength = (maxLength = 10000, errorMessage = '请求文本过长，请缩短后再试。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度') => {
   return (req, res, next) => {
     const messages = req.body.messages || [];
     let totalLength = 0;
@@ -254,7 +276,7 @@ setInterval(() => {
   console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Filter config updated.`);
   sensitivePatterns = readSensitivePatternsFromFile(sensitivePatternsFile);
   console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')}  Reloading sensitive patterns...`);
-}, 10 * 60 * 1000);
+}, 3 * 60 * 1000);
 
 // 定期清理缓存
 setInterval(() => {
@@ -329,9 +351,9 @@ for (const modelName in modelRateLimits) {
           max
         }, formattedRequestBody);
 
-        console.log(`请求过于频繁，请在 ${formattedDuration} 后再试。${modelName} 模型在 ${windowMs / 1000} 秒内的最大请求次数为 ${max} 次。`)
+        console.log(`请求过于频繁，请在 ${formattedDuration} 后再试。${modelName} 模型在 ${windowMs / 1000} 秒内的最大请求次数为 ${max} 次。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度`)
         return res.status(429).json({
-          error: `请求过于频繁，请在 ${formattedDuration} 后再试。${modelName} 模型在 ${windowMs / 1000} 秒内的最大请求次数为 ${max} 次。`,
+          error: `请求过于频繁，请在 ${formattedDuration} 后再试。${modelName} 模型在 ${windowMs / 1000} 秒内的最大请求次数为 ${max} 次。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度`,
         });
       },
     });
@@ -362,7 +384,7 @@ for (const modelName in modelRateLimits) {
       }, formattedRequestBody);
 
       return res.status(400).json({
-        error: `今天${modelName} 模型总的请求次数已达上限，请明天再试。`
+        error: `今天${modelName} 模型总的请求次数已达上限，请明天再试。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度`
       });
     }
 
@@ -428,7 +450,7 @@ const googleProxy = createProxyMiddleware({
                         )} 短时间内发送相同内容请求.`
                       );
                       return res.status(403).json({
-                        error: "请求过于频繁，请稍后再试。",
+                        error: "请求过于频繁，请稍后再试。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度",
                       });
                     } else {
                       // 更新 existingRequest 的时间戳
@@ -534,13 +556,13 @@ const chatnioProxy = createProxyMiddleware({
 
 //  googleProxy 中间件添加限流
 const googleRateLimiter = rateLimit({
-  windowMs: 10 * 60 * 1000, // 10 秒时间窗口
+  windowMs: 15 * 60 * 1000, // 10 秒时间窗口
   max: 10, // 允许 1 次请求
   keyGenerator: (req) => req.headers['x-user-ip'] || req.ip, // 使用 IP 地址作为限流键
   handler: (req, res) => {
     console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Gemini request from ${req.ip} has been rate limited.`);
     res.status(429).json({
-      error: '请求频繁，请稍后再试。',
+      error: '请求频繁，请稍后再试。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度',
     });
   },
 });
@@ -695,7 +717,7 @@ app.use('/chatnio', (req, res, next) => {
       limitRequestBodyLength(4096, '未登录用户请求文本过长，请登录后再试。')(req, res, next);
   } else {
       // 其他用户 ID，视为已登录用户
-      limitRequestBodyLength(50000, '登录用户请求文本过长，请缩短后再试。')(req, res, next);
+      limitRequestBodyLength(220000, '登录用户请求文本过长，请缩短后再试。')(req, res, next);
   }
 });
 
@@ -732,7 +754,7 @@ app.use('/', (req, res, next) => {
             )} User ${userId} 同一用户短时间内发送不同模型请求`
           );
           return res.status(429).json({
-            error: '请求过于频繁，请稍后再试。',
+            error: '请求过于频繁，请稍后再试。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度',
           });
         }
       } else {
@@ -795,7 +817,7 @@ app.use('/', (req, res, next) => {
               `主路由：${moment().format('YYYY-MM-DD HH:mm:ss')} 短时间内发送相同内容请求.`
             );
             return res.status(403).json({
-              error: '请求过于频繁，请稍后再试。',
+              error: '请求过于频繁，请稍后再试。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度',
             });
           } else {
             // 更新 existingRequest 的时间戳
