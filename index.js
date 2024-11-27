@@ -220,6 +220,31 @@ async function larkTweet(data, requestBody, webhookUrl = 'https://open.feishu.cn
   }
 }
 
+// 定义 PushDeer 通知函数
+async function pushDeerTweet(data, requestBody, pushkey = 'PDU1TGeCMgKPVBPHclUzD1pQXYSkmZrZxwLSb') { //  替换为你的 PushDeer Key
+  try {
+    const response = await fetch('https://pushdeer.pro.liujiarong.top/message/push', {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        pushkey: pushkey,
+        text: "AI 代理服务器转发请求",
+        type: "markdown",
+        desp: `\`\`\`\n模型：${data.modelName}\nIP 地址：${data.ip}\n用户 ID：${data.userId}\n时间：${data.time}\n用户请求内容：\n${requestBody}\n\`\`\``,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to send message to PushDeer: ${response.status} ${response.statusText}`);
+    }
+  } catch (error) {
+    console.error('Failed to send notification to PushDeer:', error);
+  }
+}
+
+
 //钉钉
 async function sendDingTalkMessage(message) {
   const webhookUrl = "https://oapi.dingtalk.com/robot/send?access_token=b24974e8baeb66e98b0325505e67a239860eade045056d541793e8a7daf3d2c6";
@@ -341,8 +366,8 @@ for (const modelName in modelRateLimits) {
         // 格式化用户请求内容
         const formattedRequestBody = JSON.stringify(req.body, null, 2);
 
-        // 发送飞书通知，包含格式化的用户请求内容
-        larkTweet({
+        // 发送通知，包含格式化的用户请求内容
+        pushDeerTweet({
           modelName,
           ip: req.headers['x-user-ip'] || req.body.user,
           time: moment().format('YYYY-MM-DD HH:mm:ss'),
@@ -373,8 +398,8 @@ for (const modelName in modelRateLimits) {
       // 格式化用户请求内容
       const formattedRequestBody = JSON.stringify(req.body, null, 2);
 
-      // 发送飞书通知，包含格式化的用户请求内容
-      larkTweet({
+      // 发送通知，包含格式化的用户请求内容
+      pushDeerTweet({
         modelName,
         ip: req.headers['x-user-ip'] || req.ip,
         time: moment().format('YYYY-MM-DD HH:mm:ss'),
@@ -414,7 +439,7 @@ const googleProxy = createProxyMiddleware({
       fixRequestBody(proxyReq, req, res); // 确保 fixRequestBody 生效
       console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Forwarding request to Google Proxy: ${req.method} ${proxyReq.path}`);
       const userId = req.headers['x-user-id'] || 'unknow';
-       console.log('userId',userId)
+      console.log('userId', userId)
       let requestContent = '';
 
       // 从 req.body.contents 中提取用户发送的内容
@@ -509,8 +534,8 @@ const googleProxy = createProxyMiddleware({
       if (!res.headersSent) {
         try {
           const formattedRequestBody = JSON.stringify(req.body, null, 2);
-          const geminiWebhookUrl = 'https://open.feishu.cn/open-apis/bot/v2/hook/da771957-c1a4-4a91-88e4-08e6a6dfc73e'; // 替换为你的 Gemini 飞书 webhook 地址
-          larkTweet({
+          const geminiWebhookUrl = 'PDU1TQPlo0EOE3dYxPVZYse3YK9JOZt4Lzkcl'; // 替换为你的 pushDeerTweet webhook key
+          pushDeerTweet({
             modelName: 'Gemini',
             ip: req.headers['x-user-ip'] || req.ip,
             userId: req.headers['x-user-id'] || req.userId,
@@ -540,12 +565,12 @@ const chatnioProxy = createProxyMiddleware({
           // 格式化用户请求内容
           const formattedRequestBody = JSON.stringify(req.body, null, 2);
 
-          await larkTweet({ // 使用 larkTweet 函数发送飞书通知
+          await pushDeerTweet({ // 使用 pushDeerTweet 函数发送通知
             modelName: 'Chatnio',
             ip: req.body.user_ip || req.headers['x-user-ip'] || req.ip,
             userId: req.body.user || req.headers['x-user-id'],
             time: moment().format('YYYY-MM-DD HH:mm:ss'),
-          }, formattedRequestBody, 'https://open.feishu.cn/open-apis/bot/v2/hook/8097380c-fb36-4af6-8e19-570c75ce84a1');
+          }, formattedRequestBody, 'PDU1T9KBGIzLzefdArUxuI4SuKfbOeqUwaNNm');
         } catch (error) {
           console.error('Failed to send notification to Lark:', error);
         }
@@ -556,8 +581,8 @@ const chatnioProxy = createProxyMiddleware({
 
 //  googleProxy 中间件添加限流
 const googleRateLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 10 秒时间窗口
-  max: 10, // 允许 1 次请求
+  windowMs: 30 * 60 * 1000, // 10 秒时间窗口
+  max: 15, // 允许 1 次请求
   keyGenerator: (req) => req.headers['x-user-ip'] || req.ip, // 使用 IP 地址作为限流键
   handler: (req, res) => {
     console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Gemini request from ${req.ip} has been rate limited.`);
@@ -582,10 +607,10 @@ const freeOpenAIProxy = createProxyMiddleware({
         try {
           // 格式化用户请求内容
           const formattedRequestBody = JSON.stringify(req.body, null, 2);
-          await larkTweet({
+          await pushDeerTweet({
             modelName: 'Free OpenAI',
             ip: req.headers['x-user-ip'] || req.ip,
-            userId: req.headers['x-user-id'] || req.body.user,
+            userId: req.headers['x-user-id'] || req.body.user,
             time: moment().format('YYYY-MM-DD HH:mm:ss'),
           }, formattedRequestBody);
         } catch (error) {
@@ -612,9 +637,9 @@ const freeGeminiProxy = createProxyMiddleware({
           // 格式化用户请求内容
           const formattedRequestBody = JSON.stringify(req.body, null, 2);
 
-          // 使用 Gemini 的飞书 webhook 地址
-          const geminiWebhookUrl = 'https://open.feishu.cn/open-apis/bot/v2/hook/da771957-c1a4-4a91-88e4-08e6a6dfc73e';
-          await larkTweet({
+          // 使用 自建 pushDeerTweet webhook 地址
+          const geminiWebhookUrl = 'PDU1TQPlo0EOE3dYxPVZYse3YK9JOZt4Lzkcl';
+          await pushDeerTweet({
             modelName: 'Free Gemini',
             ip: req.headers['x-user-ip'] || req.ip,
             userId: req.headers['x-user-id'] || req.body.user,
@@ -712,12 +737,12 @@ app.use('/', (req, res, next) => {
 // 应用文本长度限制中间件到 "/chatnio" 路由，根据用户 ID 动态设置最大长度
 app.use('/chatnio', (req, res, next) => {
   const userId = req.body.user || req.headers['x-user-id'];
-  if (userId && isTimestamp(userId)) { 
-      // 时间戳格式的用户 ID，视为未登录用户
-      limitRequestBodyLength(4096, '未登录用户请求文本过长，请登录后再试。')(req, res, next);
+  if (userId && isTimestamp(userId)) {
+    // 时间戳格式的用户 ID，视为未登录用户
+    limitRequestBodyLength(4096, '未登录用户请求文本过长，请登录后再试。')(req, res, next);
   } else {
-      // 其他用户 ID，视为已登录用户
-      limitRequestBodyLength(220000, '登录用户请求文本过长，请缩短后再试。')(req, res, next);
+    // 其他用户 ID，视为已登录用户
+    limitRequestBodyLength(220000, '登录用户请求文本过长，请缩短后再试。')(req, res, next);
   }
 });
 
@@ -963,9 +988,9 @@ app.use('/', (req, res, next) => {
     next();
   }
 
-  // 发送飞书通知，包含格式化的用户请求内容
+  // 发送通知，包含格式化的用户请求内容
   if (modelName) {
-    larkTweet({
+    pushDeerTweet({
       modelName,
       ip: req.headers['x-user-ip'] || req.ip,
       userId: req.headers['x-user-id'] || req.body.user,
@@ -1062,14 +1087,14 @@ function detectSensitiveContent(text, patterns) {
 // 辅助函数，用于检查字符串是否为时间戳格式，并允许一定的误差
 function isTimestamp(str, allowedErrorMs = 5 * 60 * 1000) {
   try {
-      const timestamp = parseInt(str, 10);
-      if (isNaN(timestamp)) {
-          return false;
-      }
-      const currentTime = Date.now();
-      return Math.abs(currentTime - timestamp) <= allowedErrorMs;
-  } catch (error) {
+    const timestamp = parseInt(str, 10);
+    if (isNaN(timestamp)) {
       return false;
+    }
+    const currentTime = Date.now();
+    return Math.abs(currentTime - timestamp) <= allowedErrorMs;
+  } catch (error) {
+    return false;
   }
 }
 
