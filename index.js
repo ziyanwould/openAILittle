@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2024-11-26 22:17:32
+ * @LastEditTime: 2024-11-27 23:36:38
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -244,6 +244,35 @@ async function pushDeerTweet(data, requestBody, pushkey = 'PDU1TGeCMgKPVBPHclUzD
   }
 }
 
+// 定义 NTFY 通知函数
+async function ntfyTweet(data, requestBody, ntfyTopic = 'robot') {
+  try {
+    const response = await fetch(`https://ntfy.liujiarong.top/${ntfyTopic}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer tk_osw5e3n5jvnn0sog38ga4kp0ebchv`,
+        'Content-Type': 'application/json', 
+        'Title': `${data.ip}`, 
+        'Priority': 'urgent', 
+        'Tags': 'eyes,loudspeaker,left_right_arrow' 
+      },
+      body: `模型：${data.modelName}\nIP 地址：${data.ip}\n用户 ID：${data.userId}\n时间：${data.time}\n用户请求内容：\n${requestBody}`,
+    });
+
+
+    if (!response.ok) {
+      const errorBody = await response.text(); // Get error details from body
+      throw new Error(`Failed to send message to ntfy: ${response.status} ${response.statusText}\n${errorBody}`); 
+    }
+
+  } catch (error) {
+    console.error('Failed to send notification to ntfy:', error);
+  }
+}
+
+
+
+
 
 //钉钉
 async function sendDingTalkMessage(message) {
@@ -367,10 +396,11 @@ for (const modelName in modelRateLimits) {
         const formattedRequestBody = JSON.stringify(req.body, null, 2);
 
         // 发送通知，包含格式化的用户请求内容
-        pushDeerTweet({
+        ntfyTweet({
           modelName,
-          ip: req.headers['x-user-ip'] || req.body.user,
+          ip: req.headers['x-user-ip'] || req.ip,
           time: moment().format('YYYY-MM-DD HH:mm:ss'),
+          userId: req.headers['x-user-id'] || req.userId,
           duration: formattedDuration,
           windowMs,
           max
@@ -399,9 +429,10 @@ for (const modelName in modelRateLimits) {
       const formattedRequestBody = JSON.stringify(req.body, null, 2);
 
       // 发送通知，包含格式化的用户请求内容
-      pushDeerTweet({
+      ntfyTweet({
         modelName,
         ip: req.headers['x-user-ip'] || req.ip,
+        userId: req.headers['x-user-id'] || req.userId,
         time: moment().format('YYYY-MM-DD HH:mm:ss'),
         duration: '24 小时', // 每日限制，所以持续时间为 24 小时
         windowMs: 24 * 60 * 60 * 1000, // 24 小时对应的毫秒数
@@ -534,8 +565,8 @@ const googleProxy = createProxyMiddleware({
       if (!res.headersSent) {
         try {
           const formattedRequestBody = JSON.stringify(req.body, null, 2);
-          const geminiWebhookUrl = 'PDU1TQPlo0EOE3dYxPVZYse3YK9JOZt4Lzkcl'; // 替换为你的 pushDeerTweet webhook key
-          pushDeerTweet({
+          const geminiWebhookUrl = 'gemini'; // 替换为你的 ntfyTweet webhook key
+          ntfyTweet({
             modelName: 'Gemini',
             ip: req.headers['x-user-ip'] || req.ip,
             userId: req.headers['x-user-id'] || req.userId,
@@ -565,12 +596,12 @@ const chatnioProxy = createProxyMiddleware({
           // 格式化用户请求内容
           const formattedRequestBody = JSON.stringify(req.body, null, 2);
 
-          await pushDeerTweet({ // 使用 pushDeerTweet 函数发送通知
+          await ntfyTweet({ // 使用 ntfyTweet 函数发送通知
             modelName: 'Chatnio',
             ip: req.body.user_ip || req.headers['x-user-ip'] || req.ip,
             userId: req.body.user || req.headers['x-user-id'],
             time: moment().format('YYYY-MM-DD HH:mm:ss'),
-          }, formattedRequestBody, 'PDU1T9KBGIzLzefdArUxuI4SuKfbOeqUwaNNm');
+          }, formattedRequestBody, 'chatnio');
         } catch (error) {
           console.error('Failed to send notification to Lark:', error);
         }
@@ -581,8 +612,8 @@ const chatnioProxy = createProxyMiddleware({
 
 //  googleProxy 中间件添加限流
 const googleRateLimiter = rateLimit({
-  windowMs: 30 * 60 * 1000, // 10 秒时间窗口
-  max: 15, // 允许 1 次请求
+  windowMs: 120 * 60 * 1000, // 10 秒时间窗口
+  max: 20, // 允许 1 次请求
   keyGenerator: (req) => req.headers['x-user-ip'] || req.ip, // 使用 IP 地址作为限流键
   handler: (req, res) => {
     console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Gemini request from ${req.ip} has been rate limited.`);
@@ -607,7 +638,7 @@ const freeOpenAIProxy = createProxyMiddleware({
         try {
           // 格式化用户请求内容
           const formattedRequestBody = JSON.stringify(req.body, null, 2);
-          await pushDeerTweet({
+          await ntfyTweet({
             modelName: 'Free OpenAI',
             ip: req.headers['x-user-ip'] || req.ip,
             userId: req.headers['x-user-id'] || req.body.user,
@@ -637,9 +668,9 @@ const freeGeminiProxy = createProxyMiddleware({
           // 格式化用户请求内容
           const formattedRequestBody = JSON.stringify(req.body, null, 2);
 
-          // 使用 自建 pushDeerTweet webhook 地址
-          const geminiWebhookUrl = 'PDU1TQPlo0EOE3dYxPVZYse3YK9JOZt4Lzkcl';
-          await pushDeerTweet({
+          // 使用 自建 ntfyTweet webhook 地址
+          const geminiWebhookUrl = 'gemini';
+          await ntfyTweet({
             modelName: 'Free Gemini',
             ip: req.headers['x-user-ip'] || req.ip,
             userId: req.headers['x-user-id'] || req.body.user,
@@ -990,7 +1021,7 @@ app.use('/', (req, res, next) => {
 
   // 发送通知，包含格式化的用户请求内容
   if (modelName) {
-    pushDeerTweet({
+    ntfyTweet({
       modelName,
       ip: req.headers['x-user-ip'] || req.ip,
       userId: req.headers['x-user-id'] || req.body.user,
