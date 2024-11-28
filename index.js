@@ -16,6 +16,7 @@ const bodyParser = require('body-parser');
 const moment = require('moment');
 const crypto = require('crypto'); // 引入 crypto 模块
 const fs = require('fs');
+const { sendNotification } = require('./pushDeerNotifier'); // 引入 pushDeerNotifier.js 文件中的 sendNotification 函数
 
 // Node.js 18 以上版本支持原生的 fetch API
 const app = express();
@@ -220,29 +221,8 @@ async function larkTweet(data, requestBody, webhookUrl = 'https://open.feishu.cn
   }
 }
 
-// 定义 PushDeer 通知函数
-async function pushDeerTweet(data, requestBody, pushkey = 'PDU1TGeCMgKPVBPHclUzD1pQXYSkmZrZxwLSb') { //  替换为你的 PushDeer Key
-  try {
-    const response = await fetch('https://pushdeer.pro.liujiarong.top/message/push', {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        pushkey: pushkey,
-        text: "AI 代理服务器转发请求",
-        type: "markdown",
-        desp: `\`\`\`\n模型：${data.modelName}\nIP 地址：${data.ip}\n用户 ID：${data.userId}\n时间：${data.time}\n用户请求内容：\n${requestBody}\n\`\`\``,
-      }),
-    });
+// 定义 PushDeer 通知函数【已经迁移抽取到pushDeerNotifier】
 
-    if (!response.ok) {
-      throw new Error(`Failed to send message to PushDeer: ${response.status} ${response.statusText}`);
-    }
-  } catch (error) {
-    console.error('Failed to send notification to PushDeer:', error);
-  }
-}
 
 // 定义 NTFY 通知函数
 async function ntfyTweet(data, requestBody, ntfyTopic = 'robot') {
@@ -251,10 +231,10 @@ async function ntfyTweet(data, requestBody, ntfyTopic = 'robot') {
       method: 'POST',
       headers: {
         'Authorization': `Bearer tk_osw5e3n5jvnn0sog38ga4kp0ebchv`,
-        'Content-Type': 'application/json', 
-        'Title': `${data.ip}`, 
-        'Priority': 'urgent', 
-        'Tags': 'eyes,loudspeaker,left_right_arrow' 
+        'Content-Type': 'application/json',
+        'Title': `${data.ip}`,
+        'Priority': 'urgent',
+        'Tags': 'eyes,loudspeaker,left_right_arrow'
       },
       body: `模型：${data.modelName}\nIP 地址：${data.ip}\n用户 ID：${data.userId}\n时间：${data.time}\n用户请求内容：\n${requestBody}`,
     });
@@ -262,12 +242,24 @@ async function ntfyTweet(data, requestBody, ntfyTopic = 'robot') {
 
     if (!response.ok) {
       const errorBody = await response.text(); // Get error details from body
-      throw new Error(`Failed to send message to ntfy: ${response.status} ${response.statusText}\n${errorBody}`); 
+      throw new Error(`Failed to send message to ntfy: ${response.status} ${response.statusText}\n${errorBody}`);
     }
 
   } catch (error) {
     console.error('Failed to send notification to ntfy:', error);
   }
+  /***同时 发一份给pushdeer */
+  let pushkey = 'PDU1TGeCMgKPVBPHclUzD1pQXYSkmZrZxwLSb';
+  switch (ntfyTopic) {
+    case 'gemini':
+      pushkey = 'PDU1TQPlo0EOE3dYxPVZYse3YK9JOZt4Lzkcl';
+      break;
+    case 'chatnio':
+      pushkey = 'PDU1T9KBGIzLzefdArUxuI4SuKfbOeqUwaNNm';
+
+  }
+
+  sendNotification(data, requestBody, pushkey);
 }
 
 
@@ -305,10 +297,12 @@ async function sendDingTalkMessage(message) {
 // 定义敏感词和黑名单文件路径
 const sensitiveWordsFilePath = 'Sensitive.txt'; // 可以是 .txt 或 .json
 const blacklistedUserIdsFilePath = 'BlacklistedUsers.txt'; // 可以是 .txt 或 .json
+const blacklistedIPsFilePath = 'BlacklistedIPs.txt'; // 新增 IP 黑名单文件路径
 
 // 初始化敏感词和黑名单
 let sensitiveWords = loadWordsFromFile(sensitiveWordsFilePath);
 let blacklistedUserIds = loadWordsFromFile(blacklistedUserIdsFilePath);
+let blacklistedIPs = loadWordsFromFile(blacklistedIPsFilePath); // 加载 IP 黑名单
 
 // 定义配置文件路径
 const filterConfigFilePath = 'filterConfig.json';
@@ -325,6 +319,7 @@ let sensitivePatterns = readSensitivePatternsFromFile(sensitivePatternsFile);
 setInterval(() => {
   sensitiveWords = loadWordsFromFile(sensitiveWordsFilePath);
   blacklistedUserIds = loadWordsFromFile(blacklistedUserIdsFilePath);
+  blacklistedIPs = loadWordsFromFile(blacklistedIPsFilePath); // 更新 IP 黑名单
   console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Sensitive words and blacklisted user IDs updated.`);
   filterConfig = loadFilterConfigFromFile(filterConfigFilePath);
   console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Filter config updated.`);
@@ -470,7 +465,16 @@ const googleProxy = createProxyMiddleware({
       fixRequestBody(proxyReq, req, res); // 确保 fixRequestBody 生效
       console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Forwarding request to Google Proxy: ${req.method} ${proxyReq.path}`);
       const userId = req.headers['x-user-id'] || 'unknow';
+      // 获取用户 IP 地址
+      const userIP = req.headers['x-user-ip'] || req.ip;
       console.log('userId', userId)
+      // 检查用户 IP 是否在黑名单中
+      if (userIP && blacklistedIPs.includes(userIP)) {
+        console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Request blocked for blacklisted IP: ${userIP}`);
+        return res.status(403).json({
+          error: '非法请求，请联系管理员。',
+        });
+      }
       let requestContent = '';
 
       // 从 req.body.contents 中提取用户发送的内容
@@ -700,10 +704,20 @@ app.use('/freeopenai', freeOpenAIProxy);
 app.use('/', (req, res, next) => {
   const userId = req.body.user || req.headers['x-user-id'];
   const messages = req.body.messages || [];
+  // 获取用户 IP 地址
+  const userIP = req.headers['x-user-ip'] || req.body.user_ip || req.ip;
   // 获取Authorization头部信息
   const authorizationHeader = req.headers.authorization;
   console.log('Authorization:', authorizationHeader);
   console.log('req.body.user', req.headers['x-user-id'] || req.body.user)
+
+  // 检查用户 IP 是否在黑名单中
+  if (userIP && blacklistedIPs.includes(userIP)) {
+    console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Request blocked for blacklisted IP: ${userIP}`);
+    return res.status(403).json({
+      error: '非法请求，请联系管理员。',
+    });
+  }
 
   for (const message of messages) {
     let requestContent = message.content;
@@ -774,6 +788,14 @@ app.use('/chatnio', (req, res, next) => {
   } else {
     // 其他用户 ID，视为已登录用户
     limitRequestBodyLength(220000, '登录用户请求文本过长，请缩短后再试。')(req, res, next);
+  }
+  const userIP = req.body.user_ip || req.headers['x-user-ip'] || req.ip;
+  // 检查用户 IP 是否在黑名单中
+  if (userIP && blacklistedIPs.includes(userIP)) {
+    console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Request blocked for blacklisted IP: ${userIP}`);
+    return res.status(403).json({
+      error: '非法请求，请联系管理员。',
+    });
   }
 });
 
