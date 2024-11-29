@@ -28,7 +28,7 @@ if (isMainThread) {
     async function sendNotificationToPushdeer(retries = 0) {
         let retryInterval = 1000;
         try {
-            const response = await fetch('https://pushdeer.pro.liujiarong.top/message/push', {
+            const response = await fetch('https://api2.pushdeer.com/message/push', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({

@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2024-11-27 23:36:38
+ * @LastEditTime: 2024-11-30 01:20:23
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -249,17 +249,21 @@ async function ntfyTweet(data, requestBody, ntfyTopic = 'robot') {
     console.error('Failed to send notification to ntfy:', error);
   }
   /***同时 发一份给pushdeer */
-  let pushkey = 'PDU1TGeCMgKPVBPHclUzD1pQXYSkmZrZxwLSb';
+  let pushkey = 'PDU33066TepraNW9hJp3GP5NWPCVgVaGpoxtU3EMa';
+  let webhookUrl ='https://open.feishu.cn/open-apis/bot/v2/hook/b99372d6-61f8-4fcc-bd6f-01689652fa08'
   switch (ntfyTopic) {
     case 'gemini':
-      pushkey = 'PDU1TQPlo0EOE3dYxPVZYse3YK9JOZt4Lzkcl';
+      pushkey = 'PDU33066TL6i6CtArA8KIH2u7Q9VwYEVCRfQQU9h2';
+      webhookUrl = 'https://open.feishu.cn/open-apis/bot/v2/hook/da771957-c1a4-4a91-88e4-08e6a6dfc73e'
       break;
     case 'chatnio':
-      pushkey = 'PDU1T9KBGIzLzefdArUxuI4SuKfbOeqUwaNNm';
+      pushkey = 'PDU33066TEFmDgjEuuyFFCpJ8Iq13m0lZaT8eNywx';
+      webhookUrl = 'https://open.feishu.cn/open-apis/bot/v2/hook/8097380c-fb36-4af6-8e19-570c75ce84a1'
 
   }
 
   sendNotification(data, requestBody, pushkey);
+  larkTweet(data, requestBody,webhookUrl);
 }
 
 
