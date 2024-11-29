@@ -1,0 +1,20 @@
+{
+    "lark": {
+      "enabled": true,
+      "webhookUrl": "YOUR_LARK_WEBHOOK_URL"
+    },
+    "dingTalk": {
+      "enabled": false,
+      "webhookUrl": "YOUR_DINGTALK_WEBHOOK_URL"
+    },
+    "ntfy": {
+      "enabled": true,
+      "topic": "your-ntfy-topic",
+      "token": "YOUR_NTFY_TOKEN"
+    },
+    "pushdeer": {
+      "enabled": true,
+      "pushkey": "YOUR_PUSHDEER_PUSHKEY"
+    }
+  }
+  
