@@ -16,6 +16,7 @@ const bodyParser = require('body-parser');
 const moment = require('moment');
 const crypto = require('crypto'); // 引入 crypto 模块
 const fs = require('fs');
+const url = require('url'); // 引入 url 模块
 const { sendNotification } = require('./notices/pushDeerNotifier'); // 引入 pushDeerNotifier.js 文件中的 sendNotification 函数
 const { sendLarkNotification } = require('./notices/larkNotifier'); // 引入 pushDeerNotifier.js 文件中的 sendNotification 函数
 
@@ -194,7 +195,7 @@ const defaultLengthLimiter = limitRequestBodyLength();
 async function notices(data, requestBody, ntfyTopic = 'robot') {
 
   let pushkey = 'PDU33066TepraNW9hJp3GP5NWPCVgVaGpoxtU3EMa';
-  let webhookUrl ='https://open.feishu.cn/open-apis/bot/v2/hook/b99372d6-61f8-4fcc-bd6f-01689652fa08'
+  let webhookUrl = 'https://open.feishu.cn/open-apis/bot/v2/hook/b99372d6-61f8-4fcc-bd6f-01689652fa08'
   switch (ntfyTopic) {
     case 'gemini':
       pushkey = 'PDU33066TL6i6CtArA8KIH2u7Q9VwYEVCRfQQU9h2';
@@ -207,7 +208,18 @@ async function notices(data, requestBody, ntfyTopic = 'robot') {
   }
 
   sendNotification(data, requestBody, pushkey);
-  sendLarkNotification(data, requestBody,webhookUrl);
+  sendLarkNotification(data, requestBody, webhookUrl);
+}
+
+// 从文件中加载受限用户配置
+function loadRestrictedUsersConfigFromFile(filePath) {
+  try {
+    const fileContent = fs.readFileSync(filePath, 'utf-8');
+    return JSON.parse(fileContent);
+  } catch (err) {
+    console.error(`Failed to load restricted users config from ${filePath}:`, err);
+    return {};
+  }
 }
 
 // 定义敏感词和黑名单文件路径
@@ -226,6 +238,10 @@ const filterConfigFilePath = 'filterConfig.json';
 // 初始化过滤配置
 let filterConfig = loadFilterConfigFromFile(filterConfigFilePath);
 
+// 定义受限用户配置文件路径
+const restrictedUsersConfigFilePath = 'restrictedUsers.json';
+// 加载受限用户配置
+let restrictedUsersConfig = loadRestrictedUsersConfigFromFile(restrictedUsersConfigFilePath);
 // 敏感形态的初始读取
 // 调用函数时，使用新的文件名
 let sensitivePatternsFile = 'sensitive_patterns.json';
@@ -236,6 +252,7 @@ setInterval(() => {
   sensitiveWords = loadWordsFromFile(sensitiveWordsFilePath);
   blacklistedUserIds = loadWordsFromFile(blacklistedUserIdsFilePath);
   blacklistedIPs = loadWordsFromFile(blacklistedIPsFilePath); // 更新 IP 黑名单
+  restrictedUsersConfig = loadRestrictedUsersConfigFromFile(restrictedUsersConfigFilePath); // 更新受限用户配置
   console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Sensitive words and blacklisted user IDs updated.`);
   filterConfig = loadFilterConfigFromFile(filterConfigFilePath);
   console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Filter config updated.`);
@@ -359,6 +376,38 @@ for (const modelName in modelRateLimits) {
     next();
   });
 }
+// 限制名单中间件
+function restrictGeminiModelAccess(req, res, next) {
+  let requestedModel = null;
+
+  if (req.originalUrl.startsWith('/google/v1beta/models/')) {
+    const parsedUrl = new URL(req.originalUrl, `http://${req.headers.host}`);  // 使用 req.headers.host 构建完整的 URL
+    const pathParts = parsedUrl.pathname.split('/').filter(Boolean);
+    if (pathParts.length >= 4) {
+      requestedModel = pathParts[3].split(':')[0];
+    }
+  } else {
+    requestedModel = req.body.model;
+  }
+
+  const userId = req.headers['x-user-id'] || req.body.user;
+  const userIP = req.headers['x-user-ip'] || req.body.user_ip || req.ip;
+
+  const restrictedUser = restrictedUsersConfig[userId] || restrictedUsersConfig[userIP];
+
+  if (restrictedUser && requestedModel) { // 只在用户受限且模型名称有效时进行检查
+    const allowedModels = restrictedUser.allowedModels;
+
+    if (!allowedModels.includes(requestedModel)) {
+      console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Restricted user ${userId || userIP} attempted to access disallowed model ${requestedModel}.`);
+      return res.status(403).json({ error: '您没有权限访问此模型。' });
+    } else {
+      console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Restricted user ${userId || userIP} accessed allowed model ${requestedModel}.`);
+    }
+  }
+
+  next();
+}
 
 // 创建代理中间件
 const openAIProxy = createProxyMiddleware({
@@ -370,7 +419,7 @@ const openAIProxy = createProxyMiddleware({
 });
 
 const googleProxy = createProxyMiddleware({
-  target: 'https://proxyapi.liujiarong.top/google',
+  target: 'https://proxy.liujiarong.online/google',
   changeOrigin: true,
   pathRewrite: {
     '^/google': '/', // 正确的 pathRewrite 配置，移除 /google 前缀
@@ -574,7 +623,7 @@ const freeOpenAIProxy = createProxyMiddleware({
 
 // 创建 /free/gemini 路径的代理中间件，转发到 Gemini，只发送飞书通知
 const freeGeminiProxy = createProxyMiddleware({
-  target: 'https://proxyapi.liujiarong.top/google', // 替换为你的 Gemini 代理目标地址
+  target: 'https://proxy.liujiarong.online/google', // 替换为你的 Gemini 代理目标地址
   changeOrigin: true,
   pathRewrite: {
     '^/freegemini': '/', // 移除 /free/gemini 前缀
@@ -603,6 +652,8 @@ const freeGeminiProxy = createProxyMiddleware({
     },
   },
 });
+
+app.use(restrictGeminiModelAccess); // 应用 restrictGeminiModelAccess 中间件
 
 // 应用 /free/gemini 代理中间件
 app.use('/freegemini', freeGeminiProxy);

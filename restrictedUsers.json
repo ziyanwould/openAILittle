@@ -1,0 +1,13 @@
+{
+  "760af79c-8767-49d0-89cb-3f9a0edfabf4": {
+    "allowedModels": [
+      "gpt-3.5-turbo",
+      "text-davinci-003",
+      "gpt-4o-mini",
+      "gemini-1.5-pro-latest"
+    ]
+  },
+  "192.168.1.100": {
+    "allowedModels": ["gpt-4", "claude-2"]
+  }
+}
