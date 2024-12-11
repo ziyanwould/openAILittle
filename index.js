@@ -37,14 +37,14 @@ const modelRateLimits = {
   },
   'o1-mini': {
     limits: [
-      { windowMs: 2 * 60 * 1000, max: 5 },
+      { windowMs: 2 * 60 * 1000, max: 2 },
       { windowMs: 3 * 60 * 60 * 1000, max: 15 },
     ],
     dailyLimit: 20, // 例如，gpt-4-turbo 每天总限制 500 次
   },
   'o1-preview': {
     limits: [
-      { windowMs: 2 * 60 * 1000, max: 5 },
+      { windowMs: 2 * 60 * 1000, max: 2 },
       { windowMs: 3 * 60 * 60 * 1000, max: 15 },
     ],
     dailyLimit: 20, // 例如，gpt-4-turbo 每天总限制 500 次
@@ -162,6 +162,10 @@ const modifyRequestBodyMiddleware = (req, res, next) => {
     // 匹配 "Baichuan" 开头的模型，区分大小写
     else if (req.body.model.startsWith("Baichuan")) {
       req.body.frequency_penalty = 1;
+    }
+    // 匹配包含 "glm-4v" 的模型
+    else if (req.body.model.includes("glm-4v")) {
+      req.body.max_tokens = 1024;
     }
   }
   next();
