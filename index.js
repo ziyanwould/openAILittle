@@ -170,21 +170,88 @@ const modifyRequestBodyMiddleware = (req, res, next) => {
   }
   next();
 };
-
+// 定义白名单文件路径
+const whitelistFilePath = 'whitelist.json';
+// 初始化白名单 (用户ID和IP地址)
+let whitelistedUserIds = [];
+let whitelistedIPs = [];
+// 从文件中加载白名单
+function loadWhitelistFromFile(filePath) {
+  try {
+    const fileContent = fs.readFileSync(filePath, 'utf-8');
+    const whitelist = JSON.parse(fileContent);
+    whitelistedUserIds = whitelist.userIds || [];
+    whitelistedIPs = whitelist.ips || [];
+    console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Whitelist loaded: ${whitelistedUserIds.length} user IDs, ${whitelistedIPs.length} IPs`);
+  } catch (err) {
+    console.error(`Failed to load whitelist from ${filePath}:`, err);
+    whitelistedUserIds = [];
+    whitelistedIPs = [];
+  }
+}
+// 初次加载白名单
+loadWhitelistFromFile(whitelistFilePath);
+console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Next Whitelist loaded: ${whitelistedUserIds.toString()} user IDs, ${whitelistedIPs.toString()} IPs`);
 // 中间件函数，用于限制 req.body 文本长度
 const limitRequestBodyLength = (maxLength = 10000, errorMessage = '请求文本过长，请缩短后再试。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度') => {
   return (req, res, next) => {
-    const messages = req.body.messages || [];
+    const userId = req.headers['x-user-id'] || req.body.user;
+    const userIP = req.headers['x-user-ip'] || req.body.user_ip || req.ip;
+
+    // 检查用户 ID 或 IP 是否在白名单中
+    if (whitelistedUserIds.includes(userId) || whitelistedIPs.includes(userIP)) {
+      console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Request from whitelisted user ${userId || userIP} - skipping length check.`);
+      next();
+      return;
+    }
+
     let totalLength = 0;
-    for (const message of messages) {
-      if (message.content) {
-        totalLength += String(message.content).length;
-      }
-      if (totalLength > maxLength) {
-        console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Request blocked: Text length exceeds limit.`);
-        return res.status(400).json({ error: errorMessage });
+
+    // Gemini 格式
+    if (req.body.contents && Array.isArray(req.body.contents)) {
+      for (const contentItem of req.body.contents) {
+        if (contentItem.parts && Array.isArray(contentItem.parts)) {
+          for (const part of contentItem.parts) {
+            if (part.text) {
+              totalLength += String(part.text).length;
+            }
+          }
+        }
       }
     }
+    // 三方模型和 OpenAI 格式
+    else if (req.body.messages && Array.isArray(req.body.messages)) {
+      for (const message of req.body.messages) {
+        if (message.content) {
+          if (typeof message.content === 'string') {
+            totalLength += message.content.length;
+          } else if (Array.isArray(message.content)) {
+            for (const contentItem of message.content) {
+              if (contentItem.text) {
+                totalLength += String(contentItem.text).length;
+              }
+            }
+          } else if (typeof message.content === 'object' && message.content !== null && message.content.text) {
+            // 针对 content 为单个对象的情况
+            totalLength += String(message.content.text).length;
+          }
+        }
+      }
+    }
+
+
+    if (totalLength > maxLength) {
+      console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Request blocked: Text length exceeds limit (${totalLength} > ${maxLength}).`);
+      return res.status(400).json({
+        "error": {
+          "message": errorMessage,
+          "type": "invalid_request_error",
+          "param": null,
+          "code": null
+        }
+      });
+    }
+
     next();
   };
 };
@@ -257,6 +324,7 @@ setInterval(() => {
   blacklistedUserIds = loadWordsFromFile(blacklistedUserIdsFilePath);
   blacklistedIPs = loadWordsFromFile(blacklistedIPsFilePath); // 更新 IP 黑名单
   restrictedUsersConfig = loadRestrictedUsersConfigFromFile(restrictedUsersConfigFilePath); // 更新受限用户配置
+  loadWhitelistFromFile(whitelistFilePath); // 更新白名单
   console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Sensitive words and blacklisted user IDs updated.`);
   filterConfig = loadFilterConfigFromFile(filterConfigFilePath);
   console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Filter config updated.`);
