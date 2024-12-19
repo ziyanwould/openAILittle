@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2024-11-30 01:43:15
+ * @LastEditTime: 2024-12-19 22:53:39
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -238,7 +238,6 @@ const limitRequestBodyLength = (maxLength = 10000, errorMessage = '请求文本�
         }
       }
     }
-
 
     if (totalLength > maxLength) {
       console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Request blocked: Text length exceeds limit (${totalLength} > ${maxLength}).`);
@@ -821,19 +820,25 @@ app.use('/', (req, res, next) => {
 // 应用文本长度限制中间件到 "/chatnio" 路由，根据用户 ID 动态设置最大长度
 app.use('/chatnio', (req, res, next) => {
   const userId = req.body.user || req.headers['x-user-id'];
+  // 检查用户 ID 是否为时间戳格式
   if (userId && isTimestamp(userId)) {
     // 时间戳格式的用户 ID，视为未登录用户
-    limitRequestBodyLength(4096, '未登录用户请求文本过长，请登录后再试。')(req, res, next);
+    limitRequestBodyLength(4096, '未登录用户的请求文本过长，请登录后再试。')(req, res, next);
   } else {
     // 其他用户 ID，视为已登录用户
-    limitRequestBodyLength(220000, '登录用户请求文本过长，请缩短后再试。')(req, res, next);
+    limitRequestBodyLength(520000, '请求文本过长，Token超出平台默认阈值，请缩短后再试。若有更高需求请联系网站管理员处理。')(req, res, next);
   }
   const userIP = req.body.user_ip || req.headers['x-user-ip'] || req.ip;
   // 检查用户 IP 是否在黑名单中
   if (userIP && blacklistedIPs.includes(userIP)) {
     console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Request blocked for blacklisted IP: ${userIP}`);
-    return res.status(403).json({
-      error: '非法请求，请联系管理员。',
+    return res.status(400).json({
+      "error": {
+        "message": '非法请求，请联系管理员。',
+        "type": "invalid_request_error",
+        "param": null,
+        "code": null
+      }
     });
   }
 });
@@ -1177,17 +1182,14 @@ function detectSensitiveContent(text, patterns) {
 }
 
 // 辅助函数，用于检查字符串是否为时间戳格式，并允许一定的误差
-function isTimestamp(str, allowedErrorMs = 5 * 60 * 1000) {
-  try {
-    const timestamp = parseInt(str, 10);
-    if (isNaN(timestamp)) {
+function isTimestamp(str, allowedErrorMs = 10 * 60 * 1000) {
+  const timestamp = parseInt(str, 10)*1000; //  毫秒级时间戳
+  if (isNaN(timestamp)) {
       return false;
-    }
-    const currentTime = Date.now();
-    return Math.abs(currentTime - timestamp) <= allowedErrorMs;
-  } catch (error) {
-    return false;
   }
+   // 增加时间范围的校验，需要用户传过来的就是当前时间附近的时间戳
+  const currentTime = Date.now();
+  return Math.abs(currentTime - timestamp) <= allowedErrorMs;
 }
 
 

@@ -1,4 +1,4 @@
 {
-  "userIds": ["user123", "user456", "760af79c-8767-49d0-89cb-3f9a0edfabf4"],
+  "userIds": ["user123", "user456"],
   "ips": ["192.168.1.10", "10.0.0.20"]
 }
