@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2024-12-19 22:53:39
+ * @LastEditTime: 2024-12-20 19:22:30
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -244,9 +244,7 @@ const limitRequestBodyLength = (maxLength = 10000, errorMessage = '请求文本�
       return res.status(400).json({
         "error": {
           "message": errorMessage,
-          "type": "invalid_request_error",
-          "param": null,
-          "code": null
+          "type": "invalid_request_error"
         }
       });
     }
@@ -826,7 +824,7 @@ app.use('/chatnio', (req, res, next) => {
     limitRequestBodyLength(4096, '未登录用户的请求文本过长，请登录后再试。')(req, res, next);
   } else {
     // 其他用户 ID，视为已登录用户
-    limitRequestBodyLength(520000, '请求文本过长，Token超出平台默认阈值，请缩短后再试。若有更高需求请联系网站管理员处理。')(req, res, next);
+    limitRequestBodyLength(660000, '请求文本过长，Token超出平台默认阈值，请缩短后再试。若有更高需求请联系网站管理员处理。')(req, res, next);
   }
   const userIP = req.body.user_ip || req.headers['x-user-ip'] || req.ip;
   // 检查用户 IP 是否在黑名单中
