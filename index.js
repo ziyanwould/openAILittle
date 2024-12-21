@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2024-12-20 19:22:30
+ * @LastEditTime: 2024-12-21 10:16:18
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -83,6 +83,24 @@ const modelRateLimits = {
     limits: [
       { windowMs: 2.5 * 1000, max: 1 },
       { windowMs: 60 * 1000, max: 4 },
+      { windowMs: 30 * 60 * 1000, max: 25 },
+      { windowMs: 3 * 60 * 60 * 1000, max: 100 }
+    ],
+    dailyLimit: 120,
+  },
+  'gemini-2.0-flash-exp': {
+    limits: [
+      { windowMs: 5 * 1000, max: 1 },
+      { windowMs: 90 * 1000, max: 4 },
+      { windowMs: 30 * 60 * 1000, max: 25 },
+      { windowMs: 3 * 60 * 60 * 1000, max: 100 }
+    ],
+    dailyLimit: 120,
+  },
+  'gemini-exp-1206': {
+    limits: [
+      { windowMs: 5 * 1000, max: 1 },
+      { windowMs: 90 * 1000, max: 4 },
       { windowMs: 30 * 60 * 1000, max: 25 },
       { windowMs: 3 * 60 * 60 * 1000, max: 100 }
     ],
@@ -650,7 +668,7 @@ const chatnioProxy = createProxyMiddleware({
 
 //  googleProxy 中间件添加限流
 const googleRateLimiter = rateLimit({
-  windowMs: 120 * 60 * 1000, // 10 秒时间窗口
+  windowMs: 2 * 60 * 60 * 1000, // 10 秒时间窗口
   max: 20, // 允许 1 次请求
   keyGenerator: (req) => req.headers['x-user-ip'] || req.ip, // 使用 IP 地址作为限流键
   handler: (req, res) => {
