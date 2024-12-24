@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2024-12-22 15:06:46
+ * @LastEditTime: 2024-12-24 22:05:01
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -33,35 +33,35 @@ const modelRateLimits = {
       { windowMs: 30 * 60 * 1000, max: 30 },
       { windowMs: 3 * 60 * 60 * 1000, max: 200 },
     ],
-    dailyLimit: 300, // 例如，gpt-4-turbo 每天总限制 500 次
+    dailyLimit: 1000, // 例如，gpt-4-turbo 每天总限制 500 次
   },
   'o1-mini': {
     limits: [
       { windowMs: 2 * 60 * 1000, max: 2 },
-      { windowMs: 3 * 60 * 60 * 1000, max: 15 },
+      { windowMs: 3 * 60 * 60 * 1000, max: 12 },
     ],
-    dailyLimit: 20, // 例如，gpt-4-turbo 每天总限制 500 次
+    dailyLimit: 50, // 例如，gpt-4-turbo 每天总限制 500 次
   },
   'o1-preview': {
     limits: [
       { windowMs: 2 * 60 * 1000, max: 2 },
-      { windowMs: 3 * 60 * 60 * 1000, max: 15 },
+      { windowMs: 3 * 60 * 60 * 1000, max: 12 },
     ],
-    dailyLimit: 20, // 例如，gpt-4-turbo 每天总限制 500 次
+    dailyLimit: 50, // 例如，gpt-4-turbo 每天总限制 500 次
   },
   'gpt-4-turbo': {
     limits: [
       { windowMs: 2 * 60 * 1000, max: 5 },
       { windowMs: 3 * 60 * 60 * 1000, max: 15 },
     ],
-    dailyLimit: 30, // 例如，gpt-4-turbo 每天总限制 500 次
+    dailyLimit: 300, // 例如，gpt-4-turbo 每天总限制 500 次
   },
   'gpt-4o': {
     limits: [
       { windowMs: 2 * 60 * 1000, max: 5 },
       { windowMs: 3 * 60 * 60 * 1000, max: 30 }, // 每分钟 1 次
     ],
-    dailyLimit: 30, // 例如，gpt-4o 每天总限制 300 次
+    dailyLimit: 300, // 例如，gpt-4o 每天总限制 300 次
   },
   'claude-3-haiku-20240307': {
     limits: [
@@ -77,7 +77,7 @@ const modelRateLimits = {
       { windowMs: 30 * 60 * 1000, max: 20 },
       { windowMs: 3 * 60 * 60 * 1000, max: 100 }
     ],
-    dailyLimit: 120,
+    dailyLimit: 520,
   },
   'gemini-1.5-flash-latest': {
     limits: [
@@ -86,7 +86,7 @@ const modelRateLimits = {
       { windowMs: 30 * 60 * 1000, max: 25 },
       { windowMs: 3 * 60 * 60 * 1000, max: 100 }
     ],
-    dailyLimit: 120,
+    dailyLimit: 520,
   },
   'gemini-2.0-flash-exp': {
     limits: [
@@ -95,7 +95,7 @@ const modelRateLimits = {
       { windowMs: 30 * 60 * 1000, max: 25 },
       { windowMs: 3 * 60 * 60 * 1000, max: 100 }
     ],
-    dailyLimit: 120,
+    dailyLimit: 520,
   },
   'gemini-exp-1206': {
     limits: [
@@ -104,21 +104,21 @@ const modelRateLimits = {
       { windowMs: 30 * 60 * 1000, max: 25 },
       { windowMs: 3 * 60 * 60 * 1000, max: 100 }
     ],
-    dailyLimit: 120,
+    dailyLimit: 520,
   },
   'Doubao-pro-4k': {
     limits: [
       { windowMs: 1 * 60 * 1000, max: 4 },
       { windowMs: 30 * 60 * 1000, max: 30 },
     ],
-    dailyLimit: 120, // Doubao-pro-4k 每天总限制 120 次
+    dailyLimit: 1200, // Doubao-pro-4k 每天总限制 120 次
   },
   'Doubao-pro-128k': {
     limits: [
       { windowMs: 1 * 60 * 1000, max: 4 },
       { windowMs: 30 * 60 * 1000, max: 30 },
     ],
-    dailyLimit: 120, // Doubao-pro-4k 每天总限制 120 次
+    dailyLimit: 1200, // Doubao-pro-4k 每天总限制 120 次
   },
 };
 
@@ -211,7 +211,7 @@ function loadWhitelistFromFile(filePath) {
 loadWhitelistFromFile(whitelistFilePath);
 console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Next Whitelist loaded: ${whitelistedUserIds.toString()} user IDs, ${whitelistedIPs.toString()} IPs`);
 // 中间件函数，用于限制 req.body 文本长度
-const limitRequestBodyLength = (maxLength = 10000, errorMessage = '请求文本过长，请缩短后再试。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度') => {
+const limitRequestBodyLength = (maxLength = 20000, errorMessage = '请求文本过长，请缩短后再试。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度') => {
   return (req, res, next) => {
     const userId = req.headers['x-user-id'] || req.body.user;
     const userIP = req.headers['x-user-ip'] || req.body.user_ip || req.ip;
@@ -345,7 +345,7 @@ setInterval(() => {
   console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Filter config updated.`);
   sensitivePatterns = readSensitivePatternsFromFile(sensitivePatternsFile);
   console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')}  Reloading sensitive patterns...`);
-}, 3 * 60 * 1000);
+}, 5 * 60 * 1000);
 
 // 定期清理缓存
 setInterval(() => {
@@ -842,7 +842,7 @@ app.use('/chatnio', (req, res, next) => {
     limitRequestBodyLength(4096, '未登录用户的请求文本过长，请登录后再试。')(req, res, next);
   } else {
     // 其他用户 ID，视为已登录用户
-    limitRequestBodyLength(1000000, '请求文本过长，Token超出平台默认阈值，请缩短后再试。若有更高需求请联系网站管理员处理。')(req, res, next);
+    limitRequestBodyLength(2000000, '请求文本过长，Token超出平台默认阈值，请缩短后再试。若有更高需求请联系网站管理员处理。')(req, res, next);
   }
   const userIP = req.body.user_ip || req.headers['x-user-ip'] || req.ip;
   // 检查用户 IP 是否在黑名单中
