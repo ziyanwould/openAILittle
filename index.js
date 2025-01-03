@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2024-12-24 22:05:01
+ * @LastEditTime: 2025-01-03 22:00:17
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -34,6 +34,20 @@ const modelRateLimits = {
       { windowMs: 3 * 60 * 60 * 1000, max: 200 },
     ],
     dailyLimit: 1000, // 例如，gpt-4-turbo 每天总限制 500 次
+  },
+  'cogvideox-flash': {
+    limits: [
+      { windowMs: 2 * 60 * 1000, max: 2 },
+      { windowMs: 3 * 60 * 60 * 1000, max: 12 },
+    ],
+    dailyLimit: 50, // 例如，gpt-4-turbo 每天总限制 500 次
+  },
+  'cogview-3-flash': {
+    limits: [
+      { windowMs: 2 * 60 * 1000, max: 2 },
+      { windowMs: 3 * 60 * 60 * 1000, max: 12 },
+    ],
+    dailyLimit: 50, // 例如，gpt-4-turbo 每天总限制 500 次
   },
   'o1-mini': {
     limits: [
