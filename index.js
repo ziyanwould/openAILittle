@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2025-01-03 22:00:17
+ * @LastEditTime: 2025-02-03 21:00:00
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -84,6 +84,55 @@ const modelRateLimits = {
     ],
     dailyLimit: 5,
   },
+  'claude-3-opus-20240229': {
+    limits: [
+      { windowMs: 5 * 60 * 1000, max: 2 },
+      { windowMs: 7 * 24 * 60 * 60 * 1000, max: 5 },
+    ],
+    dailyLimit: 5,
+  },
+  'claude-3-sonnet-20240229': {
+    limits: [
+      { windowMs: 5 * 60 * 1000, max: 2 },
+      { windowMs: 7 * 24 * 60 * 60 * 1000, max: 5 },
+    ],
+    dailyLimit: 5,
+  },
+  'claude-3-5-sonnet-20240620': {
+    limits: [
+      { windowMs: 5 * 60 * 1000, max: 2 },
+      { windowMs: 7 * 24 * 60 * 60 * 1000, max: 5 },
+    ],
+    dailyLimit: 5,
+  },
+  'claude-instant-1.2': {
+    limits: [
+      { windowMs: 5 * 60 * 1000, max: 2 },
+      { windowMs: 7 * 24 * 60 * 60 * 1000, max: 5 },
+    ],
+    dailyLimit: 15,
+  },
+  'claude-2': {
+    limits: [
+      { windowMs: 5 * 60 * 1000, max: 2 },
+      { windowMs: 7 * 24 * 60 * 60 * 1000, max: 5 },
+    ],
+    dailyLimit: 15,
+  },
+  'claude-2.0': {
+    limits: [
+      { windowMs: 5 * 60 * 1000, max: 2 },
+      { windowMs: 7 * 24 * 60 * 60 * 1000, max: 5 },
+    ],
+    dailyLimit: 15,
+  },
+  'claude-2.1': {
+    limits: [
+      { windowMs: 5 * 60 * 1000, max: 2 },
+      { windowMs: 7 * 24 * 60 * 60 * 1000, max: 5 },
+    ],
+    dailyLimit: 15,
+  },
   'gemini-1.5-pro-latest': {
     limits: [
       { windowMs: 3 * 1000, max: 1 },
@@ -103,6 +152,15 @@ const modelRateLimits = {
     dailyLimit: 520,
   },
   'gemini-2.0-flash-exp': {
+    limits: [
+      { windowMs: 5 * 1000, max: 1 },
+      { windowMs: 90 * 1000, max: 4 },
+      { windowMs: 30 * 60 * 1000, max: 25 },
+      { windowMs: 3 * 60 * 60 * 1000, max: 100 }
+    ],
+    dailyLimit: 520,
+  },
+  'gemini-2.0-flash-thinking-exp': {
     limits: [
       { windowMs: 5 * 1000, max: 1 },
       { windowMs: 90 * 1000, max: 4 },
@@ -1213,11 +1271,11 @@ function detectSensitiveContent(text, patterns) {
 
 // 辅助函数，用于检查字符串是否为时间戳格式，并允许一定的误差
 function isTimestamp(str, allowedErrorMs = 10 * 60 * 1000) {
-  const timestamp = parseInt(str, 10)*1000; //  毫秒级时间戳
+  const timestamp = parseInt(str, 10) * 1000; //  毫秒级时间戳
   if (isNaN(timestamp)) {
-      return false;
+    return false;
   }
-   // 增加时间范围的校验，需要用户传过来的就是当前时间附近的时间戳
+  // 增加时间范围的校验，需要用户传过来的就是当前时间附近的时间戳
   const currentTime = Date.now();
   return Math.abs(currentTime - timestamp) <= allowedErrorMs;
 }
