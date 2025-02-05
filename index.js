@@ -257,6 +257,13 @@ const modifyRequestBodyMiddleware = (req, res, next) => {
     else if (req.body.model.includes("glm-4v")) {
       req.body.max_tokens = 1024;
     }
+    // 匹配 "deepseek-" 开头的模型
+    else if (req.body.model.startsWith("deepseek-")) {
+      // 检查 max_completion_tokens 是否在2到4096之间
+      if (req.body.max_completion_tokens === undefined || req.body.max_completion_tokens < 2 || req.body.max_completion_tokens > 4096) {
+        req.body.max_completion_tokens = 4096;
+      }
+    }
   }
   next();
 };
