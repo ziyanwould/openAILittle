@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2025-02-03 21:00:00
+ * @LastEditTime: 2025-02-14 22:29:14
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -261,7 +261,7 @@ const modifyRequestBodyMiddleware = (req, res, next) => {
     else if (req.body.model.startsWith("deepseek-")) {
       // 检查 max_completion_tokens 是否在2到4096之间
       if (req.body.max_completion_tokens === undefined || req.body.max_completion_tokens < 2 || req.body.max_completion_tokens > 4096) {
-        req.body.max_completion_tokens = 4096;
+       // req.body.max_completion_tokens = 4096;
       }
     }
   }
@@ -745,6 +745,36 @@ const chatnioProxy = createProxyMiddleware({
   },
 });
 
+// 创建 /freelyai 路径的代理中间件
+const freelyaiProxy = createProxyMiddleware({
+  target: 'http://192.168.31.135:6092',
+  changeOrigin: true,
+  pathRewrite: {
+    '^/freelyai': '/', // 移除 /freelyai 前缀
+  },
+  on: {
+    proxyReq: fixRequestBody,
+    proxyRes: (proxyRes, req, res) => {
+      // 异步发送飞书通知
+      (async () => {
+        try {
+          // 格式化用户请求内容
+          const formattedRequestBody = JSON.stringify(req.body, null, 2);
+
+          await notices({ // 使用 notices 函数发送通知
+            modelName: 'freelyai',
+            ip: req.body.user_ip || req.headers['x-user-ip'] || req.ip,
+            userId: req.body.user || req.headers['x-user-id'],
+            time: moment().format('YYYY-MM-DD HH:mm:ss'),
+          }, formattedRequestBody, 'chatnio');
+        } catch (error) {
+          console.error('Failed to send notification to Lark:', error);
+        }
+      })();
+    },
+  },
+});
+
 //  googleProxy 中间件添加限流
 const googleRateLimiter = rateLimit({
   windowMs: 2 * 60 * 60 * 1000, // 10 秒时间窗口
@@ -940,6 +970,9 @@ app.use('/chatnio', (req, res, next) => {
 
 // 应用 /chatnio 代理中间件
 app.use('/chatnio', chatnioProxy);
+
+// freelyaiProxy
+app.use('/freelyai', freelyaiProxy);
 
 // 限制请求体长度
 app.use('/', defaultLengthLimiter);
