@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2025-02-14 22:29:14
+ * @LastEditTime: 2025-02-15 15:19:13
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -360,7 +360,8 @@ const defaultLengthLimiter = limitRequestBodyLength();
 async function notices(data, requestBody, ntfyTopic = 'robot') {
 
   let pushkey = 'PDU33066TepraNW9hJp3GP5NWPCVgVaGpoxtU3EMa';
-  let webhookUrl = 'https://open.feishu.cn/open-apis/bot/v2/hook/b99372d6-61f8-4fcc-bd6f-01689652fa08'
+  let webhookUrl = 'https://open.feishu.cn/open-apis/bot/v2/hook/b99372d6-61f8-4fcc-bd6f-01689652fa08' // 默认，可以认为是 robot 通道
+
   switch (ntfyTopic) {
     case 'gemini':
       pushkey = 'PDU33066TL6i6CtArA8KIH2u7Q9VwYEVCRfQQU9h2';
@@ -369,7 +370,11 @@ async function notices(data, requestBody, ntfyTopic = 'robot') {
     case 'chatnio':
       pushkey = 'PDU33066TEFmDgjEuuyFFCpJ8Iq13m0lZaT8eNywx';
       webhookUrl = 'https://open.feishu.cn/open-apis/bot/v2/hook/8097380c-fb36-4af6-8e19-570c75ce84a1'
-
+      break; //** 缺少 break; 这里导致了 chatnio 执行后会继续执行 freelyai 的逻辑！**
+    case 'freelyai':
+      pushkey = 'PDU33066Te6j12xoa58EHg6MfQoepHcgWhM152xZ1';
+      webhookUrl = 'https://open.feishu.cn/open-apis/bot/v2/hook/1a409aca-2336-4bd2-a143-6c1347570388'
+      break;
   }
 
   sendNotification(data, requestBody, pushkey);
@@ -577,7 +582,7 @@ function restrictGeminiModelAccess(req, res, next) {
 
 // 创建代理中间件
 const openAIProxy = createProxyMiddleware({
-  target: 'http://192.168.31.135:6092', // 替换为你的目标服务器地址
+  target: 'http://192.168.31.249:6039', // 替换为你的目标服务器地址
   changeOrigin: true,
   on: {
     proxyReq: fixRequestBody,
@@ -717,7 +722,7 @@ const googleProxy = createProxyMiddleware({
 
 // 创建 /chatnio 路径的代理中间件
 const chatnioProxy = createProxyMiddleware({
-  target: 'http://192.168.31.135:6092',
+  target: 'http://192.168.31.249:6039',
   changeOrigin: true,
   pathRewrite: {
     '^/chatnio': '/', // 移除 /chatnio 前缀
@@ -732,7 +737,7 @@ const chatnioProxy = createProxyMiddleware({
           const formattedRequestBody = JSON.stringify(req.body, null, 2);
 
           await notices({ // 使用 notices 函数发送通知
-            modelName: 'Chatnio',
+            modelName: 'chatnio',
             ip: req.body.user_ip || req.headers['x-user-ip'] || req.ip,
             userId: req.body.user || req.headers['x-user-id'],
             time: moment().format('YYYY-MM-DD HH:mm:ss'),
@@ -747,7 +752,7 @@ const chatnioProxy = createProxyMiddleware({
 
 // 创建 /freelyai 路径的代理中间件
 const freelyaiProxy = createProxyMiddleware({
-  target: 'http://192.168.31.135:6092',
+  target: 'http://192.168.31.249:6039',
   changeOrigin: true,
   pathRewrite: {
     '^/freelyai': '/', // 移除 /freelyai 前缀
@@ -766,7 +771,7 @@ const freelyaiProxy = createProxyMiddleware({
             ip: req.body.user_ip || req.headers['x-user-ip'] || req.ip,
             userId: req.body.user || req.headers['x-user-id'],
             time: moment().format('YYYY-MM-DD HH:mm:ss'),
-          }, formattedRequestBody, 'chatnio');
+          }, formattedRequestBody, 'freelyai');
         } catch (error) {
           console.error('Failed to send notification to Lark:', error);
         }
@@ -790,7 +795,7 @@ const googleRateLimiter = rateLimit({
 
 // 创建 /free/openai 路径的代理中间件，转发到 OpenAI，只发送飞书通知
 const freeOpenAIProxy = createProxyMiddleware({
-  target: 'http://192.168.31.135:6092',
+  target: 'http://192.168.31.249:6039',
   changeOrigin: true,
   pathRewrite: {
     '^/freeopenai': '/', // 移除 /free/openai 前缀
