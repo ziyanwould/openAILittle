@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2025-02-15 22:57:17
+ * @LastEditTime: 2025-02-15 22:59:23
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -29,11 +29,11 @@ app.use(bodyParser.json({ limit: '100mb' }));
 const modelRateLimits = {
   'gpt-4o-mini': {
     limits: [
-      { windowMs: 2 * 60 * 1000, max: 10 },
-      { windowMs: 30 * 60 * 1000, max: 50 },
-      { windowMs: 3 * 60 * 60 * 1000, max: 300 },
+      { windowMs: 2 * 60 * 1000, max: 20 },
+      { windowMs: 30 * 60 * 1000, max: 100 },
+      { windowMs: 3 * 60 * 60 * 1000, max: 500 },
     ],
-    dailyLimit: 2000, // 例如，gpt-4-turbo 每天总限制 500 次
+    dailyLimit: 5000, // 例如，gpt-4-turbo 每天总限制 500 次
   },
   'cogvideox-flash': {
     limits: [
