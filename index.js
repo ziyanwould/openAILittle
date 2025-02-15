@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2025-02-15 15:19:13
+ * @LastEditTime: 2025-02-15 22:57:17
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -29,51 +29,51 @@ app.use(bodyParser.json({ limit: '100mb' }));
 const modelRateLimits = {
   'gpt-4o-mini': {
     limits: [
-      { windowMs: 2 * 60 * 1000, max: 5 },
-      { windowMs: 30 * 60 * 1000, max: 30 },
-      { windowMs: 3 * 60 * 60 * 1000, max: 200 },
+      { windowMs: 2 * 60 * 1000, max: 10 },
+      { windowMs: 30 * 60 * 1000, max: 50 },
+      { windowMs: 3 * 60 * 60 * 1000, max: 300 },
     ],
-    dailyLimit: 1000, // 例如，gpt-4-turbo 每天总限制 500 次
+    dailyLimit: 2000, // 例如，gpt-4-turbo 每天总限制 500 次
   },
   'cogvideox-flash': {
     limits: [
-      { windowMs: 2 * 60 * 1000, max: 2 },
-      { windowMs: 3 * 60 * 60 * 1000, max: 12 },
+      { windowMs: 2 * 60 * 1000, max: 5 },
+      { windowMs: 3 * 60 * 60 * 1000, max: 20 },
     ],
     dailyLimit: 50, // 例如，gpt-4-turbo 每天总限制 500 次
   },
   'cogview-3-flash': {
     limits: [
-      { windowMs: 2 * 60 * 1000, max: 2 },
-      { windowMs: 3 * 60 * 60 * 1000, max: 12 },
+      { windowMs: 2 * 60 * 1000, max: 5 },
+      { windowMs: 3 * 60 * 60 * 1000, max: 20 },
     ],
     dailyLimit: 50, // 例如，gpt-4-turbo 每天总限制 500 次
   },
   'o1-mini': {
     limits: [
       { windowMs: 2 * 60 * 1000, max: 2 },
-      { windowMs: 3 * 60 * 60 * 1000, max: 12 },
+      { windowMs: 3 * 60 * 60 * 1000, max: 20 },
     ],
     dailyLimit: 50, // 例如，gpt-4-turbo 每天总限制 500 次
   },
   'o1-preview': {
     limits: [
       { windowMs: 2 * 60 * 1000, max: 2 },
-      { windowMs: 3 * 60 * 60 * 1000, max: 12 },
+      { windowMs: 3 * 60 * 60 * 1000, max: 20 },
     ],
     dailyLimit: 50, // 例如，gpt-4-turbo 每天总限制 500 次
   },
   'gpt-4-turbo': {
     limits: [
-      { windowMs: 2 * 60 * 1000, max: 5 },
-      { windowMs: 3 * 60 * 60 * 1000, max: 15 },
+      { windowMs: 2 * 60 * 1000, max: 10 },
+      { windowMs: 3 * 60 * 60 * 1000, max: 30 },
     ],
     dailyLimit: 300, // 例如，gpt-4-turbo 每天总限制 500 次
   },
   'gpt-4o': {
     limits: [
-      { windowMs: 2 * 60 * 1000, max: 5 },
-      { windowMs: 3 * 60 * 60 * 1000, max: 30 }, // 每分钟 1 次
+      { windowMs: 2 * 60 * 1000, max: 10 },
+      { windowMs: 3 * 60 * 60 * 1000, max: 50 }, // 每分钟 1 次
     ],
     dailyLimit: 300, // 例如，gpt-4o 每天总限制 300 次
   },
@@ -136,59 +136,59 @@ const modelRateLimits = {
   'gemini-1.5-pro-latest': {
     limits: [
       { windowMs: 3 * 1000, max: 1 },
-      { windowMs: 60 * 1000, max: 4 },
-      { windowMs: 30 * 60 * 1000, max: 20 },
+      { windowMs: 60 * 1000, max: 10 },
+      { windowMs: 30 * 60 * 1000, max: 50 },
       { windowMs: 3 * 60 * 60 * 1000, max: 100 }
     ],
-    dailyLimit: 520,
+    dailyLimit: 1000,
   },
   'gemini-1.5-flash-latest': {
     limits: [
       { windowMs: 2.5 * 1000, max: 1 },
-      { windowMs: 60 * 1000, max: 4 },
-      { windowMs: 30 * 60 * 1000, max: 25 },
+      { windowMs: 60 * 1000, max: 10 },
+      { windowMs: 30 * 60 * 1000, max: 50 },
       { windowMs: 3 * 60 * 60 * 1000, max: 100 }
     ],
-    dailyLimit: 520,
+    dailyLimit: 1000,
   },
   'gemini-2.0-flash-exp': {
     limits: [
       { windowMs: 5 * 1000, max: 1 },
-      { windowMs: 90 * 1000, max: 4 },
-      { windowMs: 30 * 60 * 1000, max: 25 },
+      { windowMs: 90 * 1000, max: 10 },
+      { windowMs: 30 * 60 * 1000, max: 50 },
       { windowMs: 3 * 60 * 60 * 1000, max: 100 }
     ],
-    dailyLimit: 520,
+    dailyLimit: 1000,
   },
   'gemini-2.0-flash-thinking-exp': {
     limits: [
       { windowMs: 5 * 1000, max: 1 },
-      { windowMs: 90 * 1000, max: 4 },
-      { windowMs: 30 * 60 * 1000, max: 25 },
+      { windowMs: 90 * 1000, max: 10 },
+      { windowMs: 30 * 60 * 1000, max: 50 },
       { windowMs: 3 * 60 * 60 * 1000, max: 100 }
     ],
-    dailyLimit: 520,
+    dailyLimit: 1000,
   },
   'gemini-exp-1206': {
     limits: [
       { windowMs: 5 * 1000, max: 1 },
-      { windowMs: 90 * 1000, max: 4 },
-      { windowMs: 30 * 60 * 1000, max: 25 },
+      { windowMs: 90 * 1000, max: 10 },
+      { windowMs: 30 * 60 * 1000, max: 50 },
       { windowMs: 3 * 60 * 60 * 1000, max: 100 }
     ],
-    dailyLimit: 520,
+    dailyLimit: 1000,
   },
   'Doubao-pro-4k': {
     limits: [
-      { windowMs: 1 * 60 * 1000, max: 4 },
-      { windowMs: 30 * 60 * 1000, max: 30 },
+      { windowMs: 1 * 60 * 1000, max: 10 },
+      { windowMs: 30 * 60 * 1000, max: 100 },
     ],
     dailyLimit: 1200, // Doubao-pro-4k 每天总限制 120 次
   },
   'Doubao-pro-128k': {
     limits: [
-      { windowMs: 1 * 60 * 1000, max: 4 },
-      { windowMs: 30 * 60 * 1000, max: 30 },
+      { windowMs: 1 * 60 * 1000, max: 10 },
+      { windowMs: 30 * 60 * 1000, max: 100 },
     ],
     dailyLimit: 1200, // Doubao-pro-4k 每天总限制 120 次
   },
@@ -220,8 +220,8 @@ const auxiliaryModels = [
 // 为辅助模型设置限流配置
 auxiliaryModels.forEach(model => {
   modelRateLimits[model] = {
-    limits: [{ windowMs: 10 * 60 * 1000, max: 8 }],
-    dailyLimit: 200,
+    limits: [{ windowMs: 10 * 60 * 1000, max: 20 }],
+    dailyLimit: 500,
   };
 });
 
@@ -290,7 +290,7 @@ function loadWhitelistFromFile(filePath) {
 loadWhitelistFromFile(whitelistFilePath);
 console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Next Whitelist loaded: ${whitelistedUserIds.toString()} user IDs, ${whitelistedIPs.toString()} IPs`);
 // 中间件函数，用于限制 req.body 文本长度
-const limitRequestBodyLength = (maxLength = 20000, errorMessage = '请求文本过长，请缩短后再试。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度') => {
+const limitRequestBodyLength = (maxLength = 30000, errorMessage = '请求文本过长，请缩短后再试。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度') => {
   return (req, res, next) => {
     const userId = req.headers['x-user-id'] || req.body.user;
     const userIP = req.headers['x-user-ip'] || req.body.user_ip || req.ip;
