@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2025-02-15 22:59:23
+ * @LastEditTime: 2025-02-16 16:03:46
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -782,7 +782,7 @@ const freelyaiProxy = createProxyMiddleware({
 
 //  googleProxy 中间件添加限流
 const googleRateLimiter = rateLimit({
-  windowMs: 2 * 60 * 60 * 1000, // 10 秒时间窗口
+  windowMs: 30 * 60 * 1000, // 30 分钟时间窗口
   max: 20, // 允许 1 次请求
   keyGenerator: (req) => req.headers['x-user-ip'] || req.ip, // 使用 IP 地址作为限流键
   handler: (req, res) => {
@@ -1167,12 +1167,12 @@ app.use('/', (req, res, next) => {
   // 检查是否为辅助模型的请求，并进行自然语言判断
   if (auxiliaryModels.includes(modelName)) {
     // 只允许用户 ID 为 undefined 的请求访问辅助模型
-    if (req.body.user !== undefined) {
+    if (!req.body.user) {
       console.log(
         `${moment().format('YYYY-MM-DD HH:mm:ss')}  Request blocked for model: ${modelName || 'unknown'}  ip ${req.ip}  user ID is not undefined`
       );
       return res.status(403).json({
-        error: '非法请求，请稍后再试。',
+        error: '非法用户请求，请稍后再试。',
       });
     }
 
@@ -1182,7 +1182,7 @@ app.use('/', (req, res, next) => {
         `${moment().format('YYYY-MM-DD HH:mm:ss')}  Request blocked for model: ${modelName || 'unknown'}  ip ${req.ip}  input is not natural language`
       );
       return res.status(403).json({
-        error: '非法请求，请稍后再试。',
+        error: '非法辅助模型请求，请稍后再试。',
       });
     }
   }
@@ -1258,6 +1258,17 @@ function prepareDataForHashing(data) {
 // 简单判断是否为自然语言
 // 使用最多的8种语言做判断，特别是中文和英文，判断其语句是否完整，是否是自然语言。
 function isNaturalLanguage(text) {
+  // 新增代码标记检测（防止代码片段误判）
+  const codePatterns = [
+    /console\.log\(/,    // JS代码
+    /def\s+\w+\(/,       // Python函数
+    /<\?php/,            // PHP代码
+    /<\/?div>/           // HTML标签
+  ];
+  
+  if (codePatterns.some(pattern => pattern.test(text))) {
+    return false;
+  }
   // 定义支持的语言及其对应的正则表达式
   const languageRegexMap = {
     'english': /^[A-Za-z0-9,.!?\s]+$/, // 英文：字母、数字、标点符号和空格
