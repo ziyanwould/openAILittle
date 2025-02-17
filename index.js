@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2025-02-16 16:03:46
+ * @LastEditTime: 2025-02-17 20:33:37
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -262,6 +262,16 @@ const modifyRequestBodyMiddleware = (req, res, next) => {
       // 检查 max_completion_tokens 是否在2到4096之间
       if (req.body.max_completion_tokens === undefined || req.body.max_completion_tokens < 2 || req.body.max_completion_tokens > 4096) {
        // req.body.max_completion_tokens = 4096;
+      }
+    }
+    //xdeepseek
+    else if (req.body.model.startsWith("xdeepseek")) {
+      // 检查 max_completion_tokens 是否在2到4096之间
+      if (req.body.top_p === undefined || req.body.top_p < 0 || req.body.top_p >= 1) {
+          req.body.top_p = 0.7;
+      }
+      if (req.body.temperature === undefined || req.body.temperature < 0 || req.body.temperature >= 1) {
+          req.body.temperature = 0.9;
       }
     }
   }
