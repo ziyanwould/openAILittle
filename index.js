@@ -240,7 +240,11 @@ const userRequestHistory = new Map();
 // 用于存储最近请求内容的哈希值和时间戳
 const recentRequestContentHashes = new Map();
 
-// 封装修改 req.body 的中间件函数
+/**
+ * 封装修改 req.body 的中间件函数 
+ * 所以通道同一个名称在此处理
+ * 不同渠道同一个名称处理，单独渠道请在铭凡aiFlow.js中单独处理
+ */
 const modifyRequestBodyMiddleware = (req, res, next) => {
   if (req.body && req.body.model) {
     // 匹配 "huggingface/" 开头的模型，区分大小写
@@ -256,23 +260,6 @@ const modifyRequestBodyMiddleware = (req, res, next) => {
     // 匹配包含 "glm-4v" 的模型
     else if (req.body.model.includes("glm-4v")) {
       req.body.max_tokens = 1024;
-    }
-    // 匹配 "deepseek-" 开头的模型
-    else if (req.body.model.startsWith("deepseek-")) {
-      // 检查 max_completion_tokens 是否在2到4096之间
-      if (req.body.max_completion_tokens === undefined || req.body.max_completion_tokens < 2 || req.body.max_completion_tokens > 4096) {
-       // req.body.max_completion_tokens = 4096;
-      }
-    }
-    //xdeepseek
-    else if (req.body.model.startsWith("xdeepseek")) {
-      // 检查 max_completion_tokens 是否在2到4096之间
-      if (req.body.top_p === undefined || req.body.top_p < 0 || req.body.top_p >= 1) {
-          req.body.top_p = 0.7;
-      }
-      if (req.body.temperature === undefined || req.body.temperature < 0 || req.body.temperature >= 1) {
-          req.body.temperature = 0.9;
-      }
     }
   }
   next();
@@ -1275,7 +1262,7 @@ function isNaturalLanguage(text) {
     /<\?php/,            // PHP代码
     /<\/?div>/           // HTML标签
   ];
-  
+
   if (codePatterns.some(pattern => pattern.test(text))) {
     return false;
   }

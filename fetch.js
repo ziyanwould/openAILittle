@@ -5,7 +5,7 @@
  * @LastEditTime: 2025-02-20 22:23:33
  * @FilePath: /openAILittle/fetch.js
  * @Description: 
- * @
+ * @ 批量注册newApi 用户
  * @Copyright (c) 2025 by ${git_name_email}, All Rights Reserved. 
  */
 const fs = require('fs').promises;
@@ -13,7 +13,7 @@ const fs = require('fs').promises;
 // 生成随机字符串函数
 function generateRandomString(length = 8) {
     const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    return Array.from({ length }, () => 
+    return Array.from({ length }, () =>
         chars[Math.floor(Math.random() * chars.length)]
     ).join('');
 }
@@ -40,9 +40,9 @@ async function registerUser() {
     try {
         const response = await fetch(url, options);
         const json = await response.json();
-        
+
         console.log('Response:', json);
-        
+
         if (json.success) {
             await saveCredentials({ username, password });
             console.log(`Credentials saved: ${username}/${password}`);
@@ -51,7 +51,7 @@ async function registerUser() {
         console.error('Request error:', err);
     } finally {
         // 设置下次请求时间（20-30秒之间）
-        const nextDelay = Math.floor(Math.random() * 11 + 20) * 1000;
+        const nextDelay = Math.floor(Math.random() * 11 + 300) * 1000;
         setTimeout(registerUser, nextDelay);
     }
 }
