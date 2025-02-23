@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2025-02-17 20:33:37
+ * @LastEditTime: 2025-02-23 23:13:53
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -504,7 +504,7 @@ for (const modelName in modelRateLimits) {
 
         console.log(`请求过于频繁，请在 ${formattedDuration} 后再试。${modelName} 模型在 ${windowMs / 1000} 秒内的最大请求次数为 ${max} 次。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度`)
         return res.status(429).json({
-          error: `请求过于频繁，请在 ${formattedDuration} 后再试。${modelName} 模型在 ${windowMs / 1000} 秒内的最大请求次数为 ${max} 次。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度`,
+          error: `4294 请求频繁，稍后重试。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度`,
         });
       },
     });
@@ -534,9 +534,9 @@ for (const modelName in modelRateLimits) {
         windowMs: 24 * 60 * 60 * 1000, // 24 小时对应的毫秒数
         max: dailyLimit
       }, formattedRequestBody);
-
+      console.log(`4295 今天${modelName} 模型总的请求次数已达上限`)
       return res.status(400).json({
-        error: `今天${modelName} 模型总的请求次数已达上限，请明天再试。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度`
+        error: `4295 请求频繁，稍后再试。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度`
       });
     }
 
@@ -568,7 +568,7 @@ function restrictGeminiModelAccess(req, res, next) {
 
     if (!allowedModels.includes(requestedModel)) {
       console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Restricted user ${userId || userIP} attempted to access disallowed model ${requestedModel}.`);
-      return res.status(403).json({ error: '您没有权限访问此模型。' });
+      return res.status(403).json({ error: '错误码4003，请联系管理员。' });
     } else {
       console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Restricted user ${userId || userIP} accessed allowed model ${requestedModel}.`);
     }
@@ -605,7 +605,7 @@ const googleProxy = createProxyMiddleware({
       if (userIP && blacklistedIPs.includes(userIP)) {
         console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Request blocked for blacklisted IP: ${userIP}`);
         return res.status(403).json({
-          error: '非法请求，请联系管理员。',
+          error: '错误码4034，请联系管理员。',
         });
       }
       let requestContent = '';
@@ -643,7 +643,7 @@ const googleProxy = createProxyMiddleware({
                         )} 短时间内发送相同内容请求.`
                       );
                       return res.status(403).json({
-                        error: "请求过于频繁，请稍后再试。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度",
+                        error: "4291 请求频繁，稍后再试。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度",
                       });
                     } else {
                       // 更新 existingRequest 的时间戳
@@ -676,7 +676,7 @@ const googleProxy = createProxyMiddleware({
       if (userId && blacklistedUserIds.includes(userId)) {
         console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Gemini request blocked for blacklisted user ID: ${userId}`);
         return res.status(403).json({
-          error: '非法请求，请稍后再试。',
+          error: '错误码4031，请稍后再试。',
         });
       }
 
@@ -684,7 +684,7 @@ const googleProxy = createProxyMiddleware({
       if (sensitiveWords.some(word => requestContent.includes(word))) {
         console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Gemini request blocked for sensitive content: ${requestContent}`);
         return res.status(400).json({
-          error: '非法请求，请稍后再试。',
+          error: '错误码4032，请稍后再试。',
         });
       }
 
@@ -693,7 +693,7 @@ const googleProxy = createProxyMiddleware({
       if (isSensitive) {
         console.log(moment().format('YYYY-MM-DD HH:mm:ss') + ":Google Sensitive content detected in text:", requestContent);
         return res.status(400).json({
-          error: '非法请求，请稍后再试。',
+          error: '错误码4033，请稍后再试。',
         });
         // Handle the sensitive content here (e.g., block or filter)
       }
@@ -783,9 +783,9 @@ const googleRateLimiter = rateLimit({
   max: 20, // 允许 1 次请求
   keyGenerator: (req) => req.headers['x-user-ip'] || req.ip, // 使用 IP 地址作为限流键
   handler: (req, res) => {
-    console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Gemini request from ${req.ip} has been rate limited.`);
+    console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 4291 Gemini request from ${req.ip} has been rate limited.`);
     res.status(429).json({
-      error: '请求频繁，请稍后再试。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度',
+      error: '4291 请求频繁，稍后再试。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度',
     });
   },
 });
@@ -880,7 +880,7 @@ app.use('/', (req, res, next) => {
   if (userIP && blacklistedIPs.includes(userIP)) {
     console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Request blocked for blacklisted IP: ${userIP}`);
     return res.status(403).json({
-      error: '非法请求，请联系管理员。',
+      error: '错误码4034，请联系管理员。',
     });
   }
 
@@ -891,7 +891,7 @@ app.use('/', (req, res, next) => {
     if (userId && blacklistedUserIds.includes(userId)) {
       console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Request blocked for blacklisted user ID: ${userId}`);
       return res.status(403).json({
-        error: '非法请求，请稍后再试。',
+        error: '错误码4031，请稍后再试。',
       });
     }
 
@@ -905,7 +905,7 @@ app.use('/', (req, res, next) => {
           // 转换失败，记录错误并拒绝请求
           console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Request blocked: Invalid request content. Cannot convert to string.`);
           return res.status(400).json({
-            error: '非法请求，请稍后再试。',
+            error: '错误码4035，请稍后再试。',
           });
         }
       }
@@ -914,14 +914,14 @@ app.use('/', (req, res, next) => {
       if (sensitiveWords.some(word => requestContent.includes(word))) {
         console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Request blocked for sensitive content: ${requestContent}`);
         return res.status(400).json({
-          error: '非法请求，请稍后再试。',
+          error: '错误码4032，请稍后再试。',
         });
       }
     } else {
       // 如果请求内容为空或其他无法处理的类型，拒绝请求
       console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Request blocked: Empty or invalid request content.`);
       return res.status(400).json({
-        error: '非法请求，请稍后再试。',
+        error: '错误码4036，请稍后再试。',
       });
     }
 
@@ -930,7 +930,7 @@ app.use('/', (req, res, next) => {
     if (isSensitive) {
       console.log(moment().format('YYYY-MM-DD HH:mm:ss') + ":Common Sensitive content detected in text:", requestContent);
       return res.status(400).json({
-        error: '非法请求，请稍后再试。',
+        error: '错误码4033，请稍后再试。',
       });
       // Handle the sensitive content here (e.g., block or filter)
     }
@@ -961,7 +961,7 @@ app.use('/chatnio', (req, res, next) => {
     console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Request blocked for blacklisted IP: ${userIP}`);
     return res.status(400).json({
       "error": {
-        "message": '非法请求，请联系管理员。',
+        "message": '错误码4034，请联系管理员。',
         "type": "invalid_request_error",
         "param": null,
         "code": null
@@ -1003,10 +1003,10 @@ app.use('/', (req, res, next) => {
           console.log(
             `${moment().format(
               'YYYY-MM-DD HH:mm:ss'
-            )} User ${userId} 同一用户短时间内发送不同模型请求`
+            )} User ${userId} 4292 同一用户短时间内发送不同模型请求`
           );
           return res.status(429).json({
-            error: '请求过于频繁，请稍后再试。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度',
+            error: '4292 请求频繁，稍后再试。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度',
           });
         }
       } else {
@@ -1036,7 +1036,7 @@ app.use('/', (req, res, next) => {
       //     // 转换失败，记录错误并拒绝请求
       //     console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Request blocked: Invalid request content. Cannot convert to string.`);
       //     return res.status(400).json({
-      //       error: '非法请求，请稍后再试。',
+      //       error: '错误码4035，请稍后再试。',
       //     });
       //   }
       // }
@@ -1069,7 +1069,7 @@ app.use('/', (req, res, next) => {
               `主路由：${moment().format('YYYY-MM-DD HH:mm:ss')} 短时间内发送相同内容请求.`
             );
             return res.status(403).json({
-              error: '请求过于频繁，请稍后再试。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度',
+              error: '4293 请求频繁，稍后再试。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度',
             });
           } else {
             // 更新 existingRequest 的时间戳
@@ -1091,7 +1091,7 @@ app.use('/', (req, res, next) => {
       // 如果请求内容为空或其他无法处理的类型，拒绝请求
       console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Request blocked: Empty or invalid request content.`);
       return res.status(400).json({
-        error: '非法请求，请稍后再试。',
+        error: '错误码4037，请稍后再试。',
       });
     }
 
@@ -1136,7 +1136,7 @@ app.use('/', (req, res, next) => {
         if (recentRequestsCache.has(cacheKey)) {
           console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Duplicate request detected and blocked for model: ${filterModelName}, user: ${req.body.user}`);
           return res.status(403).json({
-            error: '非法请求，请稍后再试。',
+            error: '错误码4038，请稍后再试。',
           });
         }
 
@@ -1150,7 +1150,7 @@ app.use('/', (req, res, next) => {
 
         // 如果匹配到过滤配置，则直接返回错误
         return res.status(403).json({
-          error: '非法请求，请稍后再试。',
+          error: '错误码4039，请稍后再试。',
         });
       }
 
@@ -1169,17 +1169,17 @@ app.use('/', (req, res, next) => {
         `${moment().format('YYYY-MM-DD HH:mm:ss')}  Request blocked for model: ${modelName || 'unknown'}  ip ${req.ip}  user ID is not undefined`
       );
       return res.status(403).json({
-        error: '非法用户请求，请稍后再试。',
+        error: '错误码4002，请稍后再试。',
       });
     }
 
     // 检查 input 是否存在且为自然语言
     if (!req.body.input || !isNaturalLanguage(req.body.input)) {
       console.log(
-        `${moment().format('YYYY-MM-DD HH:mm:ss')}  Request blocked for model: ${modelName || 'unknown'}  ip ${req.ip}  input is not natural language`
+        `${moment().format('YYYY-MM-DD HH:mm:ss')}  4001 Request blocked for model: ${modelName || 'unknown'}  ip ${req.ip}  input is not natural language`
       );
       return res.status(403).json({
-        error: '非法辅助模型请求，请稍后再试。',
+        error: '错误码4001，请稍后再试。',
       });
     }
   }
