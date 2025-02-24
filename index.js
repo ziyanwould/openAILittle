@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2025-02-24 22:58:29
+ * @LastEditTime: 2025-02-25 00:08:06
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -589,136 +589,151 @@ const openAIProxy = createProxyMiddleware({
   },
 });
 
+const cacheGeminiTimeMs = 1000 * 6; // 缓存时间设置为 30 秒
 const googleProxy = createProxyMiddleware({
   target: process.env.TARGET_SERVER_GEMIN,
   changeOrigin: true,
   pathRewrite: {
-    '^/google': '/', // 正确的 pathRewrite 配置，移除 /google 前缀
+      '^/google': '/',
   },
   on: {
-    proxyReq: (proxyReq, req, res) => {
-      // 合并 proxyReq 处理逻辑
-      fixRequestBody(proxyReq, req, res); // 确保 fixRequestBody 生效
-      console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Forwarding request to Google Proxy: ${req.method} ${proxyReq.path}`);
-      const userId = req.headers['x-user-id'] || 'unknow';
-      // 获取用户 IP 地址
-      const userIP = req.headers['x-user-ip'] || req.ip;
-      console.log('userId', userId)
-      // 检查用户 IP 是否在黑名单中
-      if (userIP && blacklistedIPs.includes(userIP)) {
-        console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Request blocked for blacklisted IP: ${userIP}`);
-        return res.status(403).json({
-          error: '错误码4034，请联系管理员。',
-        });
-      }
-      let requestContent = '';
+      proxyReq: (proxyReq, req, res) => {
+   
 
-      // 从 req.body.contents 中提取用户发送的内容
-      if (req.body.contents && Array.isArray(req.body.contents)) {
-        for (const contentItem of req.body.contents) {
-          if (contentItem.role === 'user' && contentItem.parts && Array.isArray(contentItem.parts)) {
-            for (const part of contentItem.parts) {
-              if (part.text) {
+          fixRequestBody(proxyReq, req, res);
+          console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 转发请求到 Google Proxy: ${req.method} ${proxyReq.path}`);
+          const userId = req.headers['x-user-id'] || 'unknow';
+          const userIP = req.headers['x-user-ip'] || req.ip;
+          console.log('userId', userId);
 
-                // 检查请求内容是否与最近的请求相似
-                if (part.text !== "") {
-
-                  const dataToHash = prepareDataForHashing(part.text);
-                  const requestContentHash = crypto
-                    .createHash("sha256")
-                    .update(dataToHash)
-                    .digest("hex");
-                  const currentTime = Date.now();
-
-                  // 检查缓存中是否存在相同的请求内容哈希值
-                  if (recentRequestContentHashes.has(requestContentHash)) {
-                    const existingRequest =
-                      recentRequestContentHashes.get(requestContentHash);
-
-                    // 检查请求时间差是否在阈值内
-                    const timeDifference = currentTime - existingRequest.timestamp;
-
-                    // 根据实际情况调整时间窗口
-                    if (timeDifference <= 3000) {
-                      console.log(
-                        `google路由：${moment().format(
-                          "YYYY-MM-DD HH:mm:ss"
-                        )} 短时间内发送相同内容请求.`
-                      );
-                      return res.status(403).json({
-                        error: "4291 请求频繁，稍后再试。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度",
-                      });
-                    } else {
-                      // 更新 existingRequest 的时间戳
-                      existingRequest.timestamp = currentTime;
-                    }
-                  } else {
-                    // 如果缓存中不存在该哈希值，则创建新的记录
-                    recentRequestContentHashes.set(requestContentHash, {
-                      timestamp: currentTime,
-                    });
-                  }
-                } else {
-                  setTimeout(() => {
-                    recentRequestContentHashes.delete(requestContentHash);
-                  }, cacheExpirationTimeMs);
-                }
-                if (res.headersSent) {
-                  break;
-                  return false;
-                }
-
-                requestContent += part.text;
-              }
-            }
+          // 黑名单 IP 检查
+          if (userIP && blacklistedIPs.includes(userIP)) {
+              console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 请求被阻止，因为 IP 在黑名单中: ${userIP}`);
+              return res.status(403).json({
+                  error: '错误码4034，请联系管理员。',
+              });
           }
-        }
-      }
+          
 
-      // 检查用户 ID 是否在黑名单中
-      if (userId && blacklistedUserIds.includes(userId)) {
-        console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Gemini request blocked for blacklisted user ID: ${userId}`);
-        return res.status(403).json({
-          error: '错误码4031，请稍后再试。',
-        });
-      }
+          // 获取最后一次用户输入
+          let lastUserContent = "";
+          if (req.body.contents && Array.isArray(req.body.contents)) {
+              const lastContentItem = req.body.contents[req.body.contents.length - 1];
+              if (lastContentItem.role === 'user' && lastContentItem.parts && Array.isArray(lastContentItem.parts)) {
+                  const lastPart = lastContentItem.parts[lastContentItem.parts.length - 1];
+                  if (lastPart.text) {
+                      lastUserContent = lastPart.text;
+                  }
+              }
+          }
 
-      // 检查请求内容是否包含敏感词
-      if (sensitiveWords.some(word => requestContent.includes(word))) {
-        console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Gemini request blocked for sensitive content: ${requestContent}`);
-        return res.status(400).json({
-          error: '错误码4032，请稍后再试。',
-        });
-      }
+          // 重复请求检测
+          if (lastUserContent !== "") {
+              const dataToHash = prepareDataForHashing(lastUserContent);
+              const requestContentHash = crypto.createHash("sha256").update(dataToHash).digest("hex");
+              const currentTime = Date.now();
 
-      /**正则过滤 */
-      const isSensitive = detectSensitiveContent(requestContent, sensitivePatterns);
-      if (isSensitive) {
-        console.log(moment().format('YYYY-MM-DD HH:mm:ss') + ":Google Sensitive content detected in text:", requestContent);
-        return res.status(400).json({
-          error: '错误码4033，请稍后再试。',
-        });
-        // Handle the sensitive content here (e.g., block or filter)
-      }
+              if (recentRequestContentHashes.has(requestContentHash)) {
+              const existingRequest = recentRequestContentHashes.get(requestContentHash);
+              const timeDifference = currentTime - existingRequest.timestamp;
 
-      // 仅当请求未被拦截时才发送飞书通知
-      if (!res.headersSent) {
-        try {
-          const formattedRequestBody = JSON.stringify(req.body, null, 2);
-          const geminiWebhookUrl = 'gemini'; // 替换为你的 notices webhook key
-          notices({
-            modelName: 'Gemini',
-            ip: req.headers['x-user-ip'] || req.ip,
-            userId: req.headers['x-user-id'] || req.userId,
-            time: moment().format('YYYY-MM-DD HH:mm:ss'),
-          }, formattedRequestBody, geminiWebhookUrl);
-        } catch (error) {
-          console.error('Failed to send notification to Lark:', error);
-        }
-      }
-    },
+                  if (timeDifference <= cacheGeminiTimeMs) {
+                      existingRequest.count++;
+                      if (existingRequest.count > 1) {
+                          console.log(`google路由：${moment().format("YYYY-MM-DD HH:mm:ss")} 15秒内相同内容请求超过4次.`);
+                          return res.status(400).json({
+                              error: "4291 请求频繁，稍后再试。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度",
+                          });
+                      }
+                  } else {
+                      // 超时，重置计数和时间戳，清除旧定时器
+                      existingRequest.timestamp = currentTime;
+                      existingRequest.count = 1;
+                      clearTimeout(existingRequest.timer);
+                  }
+              }  else {
+                  // 创建新记录
+                  recentRequestContentHashes.set(requestContentHash, {
+                      timestamp: currentTime,
+                      count: 1,
+                      timer: null, // 初始 timer 为 null
+                  });
+              }
+
+                // 设置/更新定时器
+              const existingRequest = recentRequestContentHashes.get(requestContentHash);
+              clearTimeout(existingRequest.timer);
+              existingRequest.timer = setTimeout(() => {
+                  recentRequestContentHashes.delete(requestContentHash);
+                   console.log(`${moment().format("YYYY-MM-DD HH:mm:ss")} 从缓存中删除哈希值:`, requestContentHash);
+              }, cacheGeminiTimeMs);
+          }
+
+          // ... (黑名单用户 ID、敏感词、正则表达式、飞书通知等代码) ...
+          // 3. 黑名单用户ID检查 (与之前相同)
+          if (userId && blacklistedUserIds.includes(userId)) {
+              console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Gemini 请求被阻止，因为用户 ID 在黑名单中: ${userId}`);
+              return res.status(403).json({
+                  error: '错误码4031，请稍后再试。',
+              });
+          }
+
+          // 4. 敏感词检查 (遍历所有文本部分)
+          if (req.body.contents && Array.isArray(req.body.contents)) {
+              for (const contentItem of req.body.contents) {
+                  if (contentItem.parts && Array.isArray(contentItem.parts)) {
+                      for (const part of contentItem.parts) {
+                          if (part.text) {
+                              if (sensitiveWords.some(word => part.text.includes(word))) {
+                                  console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Gemini 请求被阻止，因为包含敏感词: ${part.text}`);
+                                  return res.status(400).json({
+                                      error: '错误码4032，请稍后再试。',
+                                  });
+                              }
+                          }
+                      }
+                  }
+              }
+          }
+
+          // 5. 正则表达式匹配 (遍历所有文本部分)
+          if (req.body.contents && Array.isArray(req.body.contents)) {
+              for (const contentItem of req.body.contents) {
+                  if (contentItem.parts && Array.isArray(contentItem.parts)) {
+                      for (const part of contentItem.parts) {
+                          if (part.text) {
+                              if (detectSensitiveContent(part.text, sensitivePatterns)) {
+                                  console.log(moment().format('YYYY-MM-DD HH:mm:ss') + ":Google 检测到敏感内容:", part.text);
+                                  return res.status(400).json({
+                                      error: '错误码4033，请稍后再试。',
+                                  });
+                              }
+                          }
+                      }
+                  }
+              }
+          }
+           // 6. 飞书通知 (仅在请求未被拦截时发送)
+          if (!res.headersSent) {
+              // 检查响应头是否已发送 (如果已发送，说明前面的逻辑已经返回了响应)
+              try {
+                  const formattedRequestBody = JSON.stringify(req.body, null, 2); // 格式化请求体
+                  const geminiWebhookUrl = 'gemini'; // 替换为你的 notices webhook key
+                  notices({
+                      modelName: 'Gemini',  // 模型名称
+                      ip: req.headers['x-user-ip'] || req.ip, // 用户 IP
+                      userId: req.headers['x-user-id'] || req.userId,  // 用户 ID
+                      time: moment().format('YYYY-MM-DD HH:mm:ss'),    // 时间
+                  }, formattedRequestBody, geminiWebhookUrl); // 发送通知 (假设 notices 函数已定义)
+              } catch (error) {
+                  console.error('发送飞书通知失败:', error);
+              }
+          }
+      },
   },
 });
+
+
 
 // 创建 /chatnio 路径的代理中间件
 const chatnioProxy = createProxyMiddleware({
