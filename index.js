@@ -20,6 +20,9 @@ const url = require('url'); // 引入 url 模块
 const { sendNotification } = require('./notices/pushDeerNotifier'); // 引入 pushDeerNotifier.js 文件中的 sendNotification 函数
 const { sendLarkNotification } = require('./notices/larkNotifier'); // 引入 pushDeerNotifier.js 文件中的 sendNotification 函数
 
+// 在文件开头引入 dotenv
+require('dotenv').config();
+
 // Node.js 18 以上版本支持原生的 fetch API
 const app = express();
 
@@ -357,20 +360,20 @@ const defaultLengthLimiter = limitRequestBodyLength();
 async function notices(data, requestBody, ntfyTopic = 'robot') {
 
   let pushkey = 'PDU33066TepraNW9hJp3GP5NWPCVgVaGpoxtU3EMa';
-  let webhookUrl = 'https://open.feishu.cn/open-apis/bot/v2/hook/b99372d6-61f8-4fcc-bd6f-01689652fa08' // 默认，可以认为是 robot 通道
+  let webhookUrl = process.env.TARGET_SERVER_FEISHU + 'b99372d6-61f8-4fcc-bd6f-01689652fa08' // 默认，可以认为是 robot 通道
 
   switch (ntfyTopic) {
     case 'gemini':
       pushkey = 'PDU33066TL6i6CtArA8KIH2u7Q9VwYEVCRfQQU9h2';
-      webhookUrl = 'https://open.feishu.cn/open-apis/bot/v2/hook/da771957-c1a4-4a91-88e4-08e6a6dfc73e'
+      webhookUrl = process.env.TARGET_SERVER_FEISHU + 'da771957-c1a4-4a91-88e4-08e6a6dfc73e'
       break;
     case 'chatnio':
       pushkey = 'PDU33066TEFmDgjEuuyFFCpJ8Iq13m0lZaT8eNywx';
-      webhookUrl = 'https://open.feishu.cn/open-apis/bot/v2/hook/8097380c-fb36-4af6-8e19-570c75ce84a1'
+      webhookUrl = process.env.TARGET_SERVER_FEISHU + '8097380c-fb36-4af6-8e19-570c75ce84a1'
       break; //** 缺少 break; 这里导致了 chatnio 执行后会继续执行 freelyai 的逻辑！**
     case 'freelyai':
       pushkey = 'PDU33066Te6j12xoa58EHg6MfQoepHcgWhM152xZ1';
-      webhookUrl = 'https://open.feishu.cn/open-apis/bot/v2/hook/1a409aca-2336-4bd2-a143-6c1347570388'
+      webhookUrl = process.env.TARGET_SERVER_FEISHU + '1a409aca-2336-4bd2-a143-6c1347570388'
       break;
   }
 
@@ -579,7 +582,7 @@ function restrictGeminiModelAccess(req, res, next) {
 
 // 创建代理中间件
 const openAIProxy = createProxyMiddleware({
-  target: 'http://192.168.31.249:6039', // 替换为你的目标服务器地址
+  target: process.env.TARGET_SERVER, // 从环境变量中读取目标服务器地址 
   changeOrigin: true,
   on: {
     proxyReq: fixRequestBody,
@@ -587,7 +590,7 @@ const openAIProxy = createProxyMiddleware({
 });
 
 const googleProxy = createProxyMiddleware({
-  target: 'https://proxy.liujiarong.online/google',
+  target: process.env.TARGET_SERVER_GEMIN,
   changeOrigin: true,
   pathRewrite: {
     '^/google': '/', // 正确的 pathRewrite 配置，移除 /google 前缀
@@ -719,7 +722,7 @@ const googleProxy = createProxyMiddleware({
 
 // 创建 /chatnio 路径的代理中间件
 const chatnioProxy = createProxyMiddleware({
-  target: 'http://192.168.31.249:6039',
+  target: process.env.TARGET_SERVER, // 从环境变量中读取目标服务器地址
   changeOrigin: true,
   pathRewrite: {
     '^/chatnio': '/', // 移除 /chatnio 前缀
@@ -749,7 +752,7 @@ const chatnioProxy = createProxyMiddleware({
 
 // 创建 /freelyai 路径的代理中间件
 const freelyaiProxy = createProxyMiddleware({
-  target: 'http://192.168.31.249:6039',
+  target: process.env.TARGET_SERVER, // 从环境变量中读取目标服务器地址
   changeOrigin: true,
   pathRewrite: {
     '^/freelyai': '/', // 移除 /freelyai 前缀
@@ -792,7 +795,7 @@ const googleRateLimiter = rateLimit({
 
 // 创建 /free/openai 路径的代理中间件，转发到 OpenAI，只发送飞书通知
 const freeOpenAIProxy = createProxyMiddleware({
-  target: 'http://192.168.31.249:6039',
+  target: process.env.TARGET_SERVER, // 从环境变量中读取目标服务器地址
   changeOrigin: true,
   pathRewrite: {
     '^/freeopenai': '/', // 移除 /free/openai 前缀
@@ -821,7 +824,7 @@ const freeOpenAIProxy = createProxyMiddleware({
 
 // 创建 /free/gemini 路径的代理中间件，转发到 Gemini，只发送飞书通知
 const freeGeminiProxy = createProxyMiddleware({
-  target: 'https://proxy.liujiarong.online/google', // 替换为你的 Gemini 代理目标地址
+  target: process.env.TARGET_SERVER_GEMIN, // 替换为你的 Gemini 代理目标地址
   changeOrigin: true,
   pathRewrite: {
     '^/freegemini': '/', // 移除 /free/gemini 前缀

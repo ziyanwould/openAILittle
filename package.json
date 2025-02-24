@@ -13,6 +13,7 @@
     "bloomfilter": "^0.0.18",
     "body-parser": "^1.20.2",
     "crypto": "^1.0.1",
+    "dotenv": "^16.4.7",
     "express": "^4.19.2",
     "express-rate-limit": "^7.3.1",
     "http-proxy-middleware": "^3.0.0",
