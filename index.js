@@ -1027,24 +1027,18 @@ app.use('/', (req, res, next) => {
 app.use('/', (req, res, next) => {
   const messages = req.body.messages || [];
 
-  for (const message of messages) {
-    let requestContent = message.content;
+  // 只处理 messages 数组中的最后一个消息（即当前用户发送的消息）
+  if (messages.length > 0) {
+    const lastMessage = messages[messages.length - 1];
+
+    if (lastMessage.role !== 'user') {
+      return next(); // 如果不是用户发送的，直接跳过
+    }
+    let requestContent = lastMessage.content;
 
     if (requestContent) {
-      // if (typeof requestContent !== 'string') {
-      //   try {
-      //     // 尝试将非字符串类型转换为字符串
-      //     requestContent = String(requestContent);
-      //   } catch (error) {
-      //     // 转换失败，记录错误并拒绝请求
-      //     console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Request blocked: Invalid request content. Cannot convert to string.`);
-      //     return res.status(400).json({
-      //       error: '错误码4035，请稍后再试。',
-      //     });
-      //   }
-      // }
-      let contentWithoutTitlePrompt = null
-      // ... (使用转换后的 requestContent 字符串进行相似度检测)
+      let contentWithoutTitlePrompt = null;
+
       // 从请求内容中移除用于生成标题的部分
       if (typeof requestContent === 'string') {
         const titlePromptRegExp = /你是一名擅长会话的助理，你需要将用户的会话总结为 10 个字以内的标题/g;
@@ -1053,55 +1047,48 @@ app.use('/', (req, res, next) => {
         contentWithoutTitlePrompt = requestContent;
       }
 
-
       if (contentWithoutTitlePrompt !== '') {
         const dataToHash = prepareDataForHashing(contentWithoutTitlePrompt);
         const requestContentHash = crypto.createHash('sha256').update(dataToHash).digest('hex');
         const currentTime = Date.now();
 
-        // 检查缓存中是否存在相同的请求内容哈希值
         if (recentRequestContentHashes.has(requestContentHash)) {
           const existingRequest = recentRequestContentHashes.get(requestContentHash);
-
-          // 检查请求时间差是否在阈值内
+          console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 缓存中存在相同哈希值，上次请求时间:`, existingRequest.timestamp);
           const timeDifference = currentTime - existingRequest.timestamp;
 
-          // 根据实际情况调整时间窗口
-          if (timeDifference <= 3000) {
+          if (timeDifference <= 10000) {
             console.log(
-              `主路由：${moment().format('YYYY-MM-DD HH:mm:ss')} 短时间内发送相同内容请求.`
+              `${moment().format('YYYY-MM-DD HH:mm:ss')} 主路由：短时间内发送相同内容请求. 触发拦截！`
             );
             return res.status(403).json({
               error: '4293 请求频繁，稍后再试。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度',
             });
           } else {
-            // 更新 existingRequest 的时间戳
             existingRequest.timestamp = currentTime;
+            // 从这里移除，因为我们只需要保留一个全局的定时器
           }
         } else {
-          // 如果缓存中不存在该哈希值，则创建新的记录
           recentRequestContentHashes.set(requestContentHash, {
             timestamp: currentTime,
           });
-        }
 
-        // 设置定时器，在过期时间后从缓存中删除请求内容哈希值
+        }
+        // 设置定时器 (只需要设置一次)
         setTimeout(() => {
           recentRequestContentHashes.delete(requestContentHash);
         }, cacheExpirationTimeMs);
+      } else {
+        console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 移除标题后的内容为空字符串，跳过哈希检查。`);
       }
     } else {
-      // 如果请求内容为空或其他无法处理的类型，拒绝请求
       console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Request blocked: Empty or invalid request content.`);
       return res.status(400).json({
         error: '错误码4037，请稍后再试。',
       });
     }
-
-    // 如果已经触发拦截逻辑，则跳出循环
-    if (res.headersSent) {
-      break;
-    }
+  } else {
+    console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} messages 数组为空，跳过重复性检查。`);
   }
 
   next();
@@ -1247,6 +1234,7 @@ function prepareDataForHashing(data) {
       const base64Image = str.replace(/^data:image\/\w+;base64,/, '');
       return base64Image;
     } else {
+      console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} prepareDataForHashing: 遇到了未处理的对象类型`, data);
       return JSON.stringify(data);
     }
   } else {
