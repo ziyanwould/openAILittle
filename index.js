@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2025-02-23 23:13:53
+ * @LastEditTime: 2025-02-24 22:58:29
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -1024,80 +1024,96 @@ app.use('/', (req, res, next) => {
 });
 
 // 中间件函数，用于限制不同用户短时间内发送相似请求
+const cacheTimeMs = 15 * 1000; // 缓存过期时间，15 秒
 app.use('/', (req, res, next) => {
   const messages = req.body.messages || [];
+  console.log(messages);
 
   // 只处理 messages 数组中的最后一个消息（即当前用户发送的消息）
   if (messages.length > 0) {
-    const lastMessage = messages[messages.length - 1];
+      const lastMessage = messages[messages.length - 1];
 
-    if (lastMessage.role !== 'user') {
-      console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 最后一条消息不是用户发送的，跳过重复性检查。`);
-      return next(); // 如果不是用户发送的，直接跳过
-    }
-    let requestContent = lastMessage.content;
-
-    if (requestContent) {
-      let contentWithoutTitlePrompt = null;
-
-      // 从请求内容中移除用于生成标题的部分
-      if (typeof requestContent === 'string') {
-        const titlePromptRegExp = /你是一名擅长会话的助理，你需要将用户的会话总结为 10 个字以内的标题/g;
-        contentWithoutTitlePrompt = requestContent.replace(titlePromptRegExp, '').trim();
-        console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 移除标题提示后的内容:`, contentWithoutTitlePrompt);
-      } else {
-        contentWithoutTitlePrompt = requestContent;
-        console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 请求内容不是字符串，直接使用:`, contentWithoutTitlePrompt);
+      if (lastMessage.role !== 'user') {
+          console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 最后一条消息不是用户发送的，跳过重复性检查。`);
+          return next(); // 如果不是用户发送的，直接跳过
       }
+      let requestContent = lastMessage.content;
 
-      if (contentWithoutTitlePrompt !== '') {
-        const dataToHash = prepareDataForHashing(contentWithoutTitlePrompt);
-        console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 用于哈希的数据:`, dataToHash);
-        const requestContentHash = crypto.createHash('sha256').update(dataToHash).digest('hex');
-        console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 请求内容的哈希值:`, requestContentHash);
-        const currentTime = Date.now();
+      if (requestContent) {
+          let contentWithoutTitlePrompt = null;
 
-        if (recentRequestContentHashes.has(requestContentHash)) {
-          const existingRequest = recentRequestContentHashes.get(requestContentHash);
-          console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 缓存中存在相同哈希值，上次请求时间:`, existingRequest.timestamp);
-          const timeDifference = currentTime - existingRequest.timestamp;
-          console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 时间差:`, timeDifference);
-
-          if (timeDifference <= 3000) {
-            console.log(
-              `${moment().format('YYYY-MM-DD HH:mm:ss')} 主路由：短时间内发送相同内容请求. 触发拦截！`
-            );
-            return res.status(403).json({
-              error: '4293 请求频繁，稍后再试。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度',
-            });
+          // 从请求内容中移除用于生成标题的部分
+          if (typeof requestContent === 'string') {
+              const titlePromptRegExp = /你是一名擅长会话的助理，你需要将用户的会话总结为 10 个字以内的标题/g;
+              contentWithoutTitlePrompt = requestContent.replace(titlePromptRegExp, '').trim();
+              console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 移除标题提示后的内容:`, contentWithoutTitlePrompt);
           } else {
-            console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 更新缓存中请求的时间戳`);
-            existingRequest.timestamp = currentTime;
-            // 从这里移除，因为我们只需要保留一个全局的定时器
+              contentWithoutTitlePrompt = requestContent;
+              console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 请求内容不是字符串，直接使用:`, contentWithoutTitlePrompt);
           }
-        } else {
-          console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 缓存中不存在该哈希值，创建新记录`);
-          recentRequestContentHashes.set(requestContentHash, {
-            timestamp: currentTime,
-          });
 
-        }
-        // 设置定时器 (只需要设置一次)
-        setTimeout(() => {
-          console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 从缓存中删除哈希值:`, requestContentHash);
-          recentRequestContentHashes.delete(requestContentHash);
-        }, cacheExpirationTimeMs);
+          if (contentWithoutTitlePrompt !== '') {
+              const dataToHash = prepareDataForHashing(contentWithoutTitlePrompt);
+              console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 用于哈希的数据:`, dataToHash);
+              const requestContentHash = crypto.createHash('sha256').update(dataToHash).digest('hex');
+              console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 请求内容的哈希值:`, requestContentHash);
+              const currentTime = Date.now();
+
+              if (recentRequestContentHashes.has(requestContentHash)) {
+                  const existingRequest = recentRequestContentHashes.get(requestContentHash);
+                  console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 缓存中存在相同哈希值，上次请求时间:`, existingRequest.timestamp);
+
+                
+                  const timeDifference = currentTime - existingRequest.timestamp;
+
+                   if (timeDifference <= cacheTimeMs) {
+                        existingRequest.count++;
+                        console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 更新计数: ${existingRequest.count}`);
+
+                       if (existingRequest.count > 3) {
+                          console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 15秒内相同内容请求超过3次. 触发拦截！`);
+                           return res.status(400).json({
+                                error: '4293 请求频繁，稍后再试。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度',
+                          });
+                       }
+                   }
+                   else{
+                      //超过15秒，重置
+                       existingRequest.timestamp = currentTime;
+                       existingRequest.count = 1;
+                   }
+                 
+              } else {
+                  console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 缓存中不存在该哈希值，创建新记录`);
+                  recentRequestContentHashes.set(requestContentHash, {
+                      timestamp: currentTime,
+                      count: 1, // 初始计数为 1
+                  });
+              }
+
+              // 为每个哈希值设置单独的定时器
+              if (recentRequestContentHashes.has(requestContentHash)) {
+                  const existingRequest = recentRequestContentHashes.get(requestContentHash);
+                  //先清除之前的定时器，因为有新的请求
+                  clearTimeout(existingRequest.timer);
+
+                  existingRequest.timer = setTimeout(() => {
+                      console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 从缓存中删除哈希值:`, requestContentHash);
+                      recentRequestContentHashes.delete(requestContentHash);
+                  }, cacheTimeMs);
+              }
+
+          } else {
+              console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 移除标题后的内容为空字符串，跳过哈希检查。`);
+          }
       } else {
-        console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 移除标题后的内容为空字符串，跳过哈希检查。`);
+          console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Request blocked: Empty or invalid request content.`);
+          return res.status(400).json({
+              error: '错误码4037，请稍后再试。',
+          });
       }
-    } else {
-      console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Request blocked: Empty or invalid request content.`);
-      return res.status(400).json({
-        error: '错误码4037，请稍后再试。',
-      });
-    }
   } else {
-    console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} messages 数组为空，跳过重复性检查。`);
+      console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} messages 数组为空，跳过重复性检查。`);
   }
 
   console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 请求处理完成，继续执行下一个中间件`);
