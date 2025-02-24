@@ -1032,6 +1032,7 @@ app.use('/', (req, res, next) => {
     const lastMessage = messages[messages.length - 1];
 
     if (lastMessage.role !== 'user') {
+      console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 最后一条消息不是用户发送的，跳过重复性检查。`);
       return next(); // 如果不是用户发送的，直接跳过
     }
     let requestContent = lastMessage.content;
@@ -1043,21 +1044,26 @@ app.use('/', (req, res, next) => {
       if (typeof requestContent === 'string') {
         const titlePromptRegExp = /你是一名擅长会话的助理，你需要将用户的会话总结为 10 个字以内的标题/g;
         contentWithoutTitlePrompt = requestContent.replace(titlePromptRegExp, '').trim();
+        console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 移除标题提示后的内容:`, contentWithoutTitlePrompt);
       } else {
         contentWithoutTitlePrompt = requestContent;
+        console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 请求内容不是字符串，直接使用:`, contentWithoutTitlePrompt);
       }
 
       if (contentWithoutTitlePrompt !== '') {
         const dataToHash = prepareDataForHashing(contentWithoutTitlePrompt);
+        console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 用于哈希的数据:`, dataToHash);
         const requestContentHash = crypto.createHash('sha256').update(dataToHash).digest('hex');
+        console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 请求内容的哈希值:`, requestContentHash);
         const currentTime = Date.now();
 
         if (recentRequestContentHashes.has(requestContentHash)) {
           const existingRequest = recentRequestContentHashes.get(requestContentHash);
           console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 缓存中存在相同哈希值，上次请求时间:`, existingRequest.timestamp);
           const timeDifference = currentTime - existingRequest.timestamp;
+          console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 时间差:`, timeDifference);
 
-          if (timeDifference <= 50000) {
+          if (timeDifference <= 3000) {
             console.log(
               `${moment().format('YYYY-MM-DD HH:mm:ss')} 主路由：短时间内发送相同内容请求. 触发拦截！`
             );
@@ -1065,10 +1071,12 @@ app.use('/', (req, res, next) => {
               error: '4293 请求频繁，稍后再试。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度',
             });
           } else {
+            console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 更新缓存中请求的时间戳`);
             existingRequest.timestamp = currentTime;
             // 从这里移除，因为我们只需要保留一个全局的定时器
           }
         } else {
+          console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 缓存中不存在该哈希值，创建新记录`);
           recentRequestContentHashes.set(requestContentHash, {
             timestamp: currentTime,
           });
@@ -1076,6 +1084,7 @@ app.use('/', (req, res, next) => {
         }
         // 设置定时器 (只需要设置一次)
         setTimeout(() => {
+          console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 从缓存中删除哈希值:`, requestContentHash);
           recentRequestContentHashes.delete(requestContentHash);
         }, cacheExpirationTimeMs);
       } else {
@@ -1091,9 +1100,9 @@ app.use('/', (req, res, next) => {
     console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} messages 数组为空，跳过重复性检查。`);
   }
 
+  console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 请求处理完成，继续执行下一个中间件`);
   next();
 });
-
 // 中间件函数，根据请求参数应用不同的限流策略和过滤重复请求
 app.use('/', (req, res, next) => {
   let modelName = null;
