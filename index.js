@@ -1057,7 +1057,7 @@ app.use('/', (req, res, next) => {
           console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 缓存中存在相同哈希值，上次请求时间:`, existingRequest.timestamp);
           const timeDifference = currentTime - existingRequest.timestamp;
 
-          if (timeDifference <= 10000) {
+          if (timeDifference <= 50000) {
             console.log(
               `${moment().format('YYYY-MM-DD HH:mm:ss')} 主路由：短时间内发送相同内容请求. 触发拦截！`
             );
