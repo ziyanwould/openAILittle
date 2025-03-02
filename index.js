@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2025-02-25 00:08:06
+ * @LastEditTime: 2025-03-02 16:56:28
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -263,6 +263,12 @@ const modifyRequestBodyMiddleware = (req, res, next) => {
     // 匹配包含 "glm-4v" 的模型
     else if (req.body.model.includes("glm-4v")) {
       req.body.max_tokens = 1024;
+    }
+    else if (req.body.model === "o3-mini") {
+      delete req.body.top_p;
+    }
+    else if (req.body.model === "o1-mini") {
+      delete req.body.top_p;
     }
   }
   next();
