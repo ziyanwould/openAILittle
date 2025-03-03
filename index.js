@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2025-03-02 16:56:28
+ * @LastEditTime: 2025-03-03 23:21:36
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -28,7 +28,7 @@ const app = express();
 
 app.use(bodyParser.json({ limit: '100mb' }));
 
-// 定义不同模型的多重限流配置
+// 定义不同模型的多重限流配置 Doubao-Seaweed
 const modelRateLimits = {
   'gpt-4o-mini': {
     limits: [
@@ -195,6 +195,13 @@ const modelRateLimits = {
     ],
     dailyLimit: 1200, // Doubao-pro-4k 每天总限制 120 次
   },
+  'Doubao-Seaweed': {
+    limits: [
+      { windowMs: 1 * 60 * 1000, max: 2 },
+      { windowMs: 30 * 60 * 1000, max: 5 },
+    ],
+    dailyLimit: 50, // Doubao-pro-4k 每天总限制 120 次
+  },
 };
 
 // 定义辅助模型列表
@@ -264,6 +271,7 @@ const modifyRequestBodyMiddleware = (req, res, next) => {
     else if (req.body.model.includes("glm-4v")) {
       req.body.max_tokens = 1024;
     }
+    // 匹配 "o3-mini" 模型，删除 top_p 参数
     else if (req.body.model === "o3-mini") {
       delete req.body.top_p;
     }
@@ -944,9 +952,9 @@ app.use('/', (req, res, next) => {
     } else {
       // 如果请求内容为空或其他无法处理的类型，拒绝请求
       console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Request blocked: Empty or invalid request content.`);
-      return res.status(400).json({
-        error: '错误码4036，请稍后再试。',
-      });
+      //return res.status(400).json({
+        //error: '错误码4036，请稍后再试。',
+      //});
     }
 
     /**正则过滤 */
