@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2025-03-03 23:21:36
+ * @LastEditTime: 2025-03-08 23:46:42
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -19,6 +19,8 @@ const fs = require('fs');
 const url = require('url'); // 引入 url 模块
 const { sendNotification } = require('./notices/pushDeerNotifier'); // 引入 pushDeerNotifier.js 文件中的 sendNotification 函数
 const { sendLarkNotification } = require('./notices/larkNotifier'); // 引入 pushDeerNotifier.js 文件中的 sendNotification 函数
+const chatnioRateLimits = require('./modules/chatnioRateLimits'); // 引入 chatnio 限流配置
+const chatnioRateLimiters = {}; // 用于存储 chatnio 的限流器
 
 // 在文件开头引入 dotenv
 require('dotenv').config();
@@ -29,203 +31,10 @@ const app = express();
 app.use(bodyParser.json({ limit: '100mb' }));
 
 // 定义不同模型的多重限流配置 Doubao-Seaweed
-const modelRateLimits = {
-  'gpt-4o-mini': {
-    limits: [
-      { windowMs: 2 * 60 * 1000, max: 20 },
-      { windowMs: 30 * 60 * 1000, max: 100 },
-      { windowMs: 3 * 60 * 60 * 1000, max: 500 },
-    ],
-    dailyLimit: 5000, // 例如，gpt-4-turbo 每天总限制 500 次
-  },
-  'cogvideox-flash': {
-    limits: [
-      { windowMs: 2 * 60 * 1000, max: 5 },
-      { windowMs: 3 * 60 * 60 * 1000, max: 20 },
-    ],
-    dailyLimit: 50, // 例如，gpt-4-turbo 每天总限制 500 次
-  },
-  'cogview-3-flash': {
-    limits: [
-      { windowMs: 2 * 60 * 1000, max: 5 },
-      { windowMs: 3 * 60 * 60 * 1000, max: 20 },
-    ],
-    dailyLimit: 50, // 例如，gpt-4-turbo 每天总限制 500 次
-  },
-  'o1-mini': {
-    limits: [
-      { windowMs: 2 * 60 * 1000, max: 2 },
-      { windowMs: 3 * 60 * 60 * 1000, max: 20 },
-    ],
-    dailyLimit: 50, // 例如，gpt-4-turbo 每天总限制 500 次
-  },
-  'o1-preview': {
-    limits: [
-      { windowMs: 2 * 60 * 1000, max: 2 },
-      { windowMs: 3 * 60 * 60 * 1000, max: 20 },
-    ],
-    dailyLimit: 50, // 例如，gpt-4-turbo 每天总限制 500 次
-  },
-  'gpt-4-turbo': {
-    limits: [
-      { windowMs: 2 * 60 * 1000, max: 10 },
-      { windowMs: 3 * 60 * 60 * 1000, max: 30 },
-    ],
-    dailyLimit: 300, // 例如，gpt-4-turbo 每天总限制 500 次
-  },
-  'gpt-4o': {
-    limits: [
-      { windowMs: 2 * 60 * 1000, max: 10 },
-      { windowMs: 3 * 60 * 60 * 1000, max: 50 }, // 每分钟 1 次
-    ],
-    dailyLimit: 300, // 例如，gpt-4o 每天总限制 300 次
-  },
-  'claude-3-haiku-20240307': {
-    limits: [
-      { windowMs: 5 * 60 * 1000, max: 2 },
-      { windowMs: 7 * 24 * 60 * 60 * 1000, max: 5 },
-    ],
-    dailyLimit: 5,
-  },
-  'claude-3-opus-20240229': {
-    limits: [
-      { windowMs: 5 * 60 * 1000, max: 2 },
-      { windowMs: 7 * 24 * 60 * 60 * 1000, max: 5 },
-    ],
-    dailyLimit: 5,
-  },
-  'claude-3-sonnet-20240229': {
-    limits: [
-      { windowMs: 5 * 60 * 1000, max: 2 },
-      { windowMs: 7 * 24 * 60 * 60 * 1000, max: 5 },
-    ],
-    dailyLimit: 5,
-  },
-  'claude-3-5-sonnet-20240620': {
-    limits: [
-      { windowMs: 5 * 60 * 1000, max: 2 },
-      { windowMs: 7 * 24 * 60 * 60 * 1000, max: 5 },
-    ],
-    dailyLimit: 5,
-  },
-  'claude-instant-1.2': {
-    limits: [
-      { windowMs: 5 * 60 * 1000, max: 2 },
-      { windowMs: 7 * 24 * 60 * 60 * 1000, max: 5 },
-    ],
-    dailyLimit: 15,
-  },
-  'claude-2': {
-    limits: [
-      { windowMs: 5 * 60 * 1000, max: 2 },
-      { windowMs: 7 * 24 * 60 * 60 * 1000, max: 5 },
-    ],
-    dailyLimit: 15,
-  },
-  'claude-2.0': {
-    limits: [
-      { windowMs: 5 * 60 * 1000, max: 2 },
-      { windowMs: 7 * 24 * 60 * 60 * 1000, max: 5 },
-    ],
-    dailyLimit: 15,
-  },
-  'claude-2.1': {
-    limits: [
-      { windowMs: 5 * 60 * 1000, max: 2 },
-      { windowMs: 7 * 24 * 60 * 60 * 1000, max: 5 },
-    ],
-    dailyLimit: 15,
-  },
-  'gemini-1.5-pro-latest': {
-    limits: [
-      { windowMs: 3 * 1000, max: 1 },
-      { windowMs: 60 * 1000, max: 10 },
-      { windowMs: 30 * 60 * 1000, max: 50 },
-      { windowMs: 3 * 60 * 60 * 1000, max: 100 }
-    ],
-    dailyLimit: 1000,
-  },
-  'gemini-1.5-flash-latest': {
-    limits: [
-      { windowMs: 2.5 * 1000, max: 1 },
-      { windowMs: 60 * 1000, max: 10 },
-      { windowMs: 30 * 60 * 1000, max: 50 },
-      { windowMs: 3 * 60 * 60 * 1000, max: 100 }
-    ],
-    dailyLimit: 1000,
-  },
-  'gemini-2.0-flash-exp': {
-    limits: [
-      { windowMs: 5 * 1000, max: 1 },
-      { windowMs: 90 * 1000, max: 10 },
-      { windowMs: 30 * 60 * 1000, max: 50 },
-      { windowMs: 3 * 60 * 60 * 1000, max: 100 }
-    ],
-    dailyLimit: 1000,
-  },
-  'gemini-2.0-flash-thinking-exp': {
-    limits: [
-      { windowMs: 5 * 1000, max: 1 },
-      { windowMs: 90 * 1000, max: 10 },
-      { windowMs: 30 * 60 * 1000, max: 50 },
-      { windowMs: 3 * 60 * 60 * 1000, max: 100 }
-    ],
-    dailyLimit: 1000,
-  },
-  'gemini-exp-1206': {
-    limits: [
-      { windowMs: 5 * 1000, max: 1 },
-      { windowMs: 90 * 1000, max: 10 },
-      { windowMs: 30 * 60 * 1000, max: 50 },
-      { windowMs: 3 * 60 * 60 * 1000, max: 100 }
-    ],
-    dailyLimit: 1000,
-  },
-  'Doubao-pro-4k': {
-    limits: [
-      { windowMs: 1 * 60 * 1000, max: 10 },
-      { windowMs: 30 * 60 * 1000, max: 100 },
-    ],
-    dailyLimit: 1200, // Doubao-pro-4k 每天总限制 120 次
-  },
-  'Doubao-pro-128k': {
-    limits: [
-      { windowMs: 1 * 60 * 1000, max: 10 },
-      { windowMs: 30 * 60 * 1000, max: 100 },
-    ],
-    dailyLimit: 1200, // Doubao-pro-4k 每天总限制 120 次
-  },
-  'Doubao-Seaweed': {
-    limits: [
-      { windowMs: 1 * 60 * 1000, max: 2 },
-      { windowMs: 30 * 60 * 1000, max: 5 },
-    ],
-    dailyLimit: 50, // Doubao-pro-4k 每天总限制 120 次
-  },
-};
+const modelRateLimits = require('./modules/modelRateLimits'); 
 
 // 定义辅助模型列表
-const auxiliaryModels = [
-  'text-embedding-ada-002',
-  'text-embedding-3-small',
-  'text-embedding-3-large',
-  'text-curie-001',
-  'text-babbage-001',
-  'text-ada-001',
-  'text-davinci-002',
-  'text-davinci-003',
-  'text-moderation-latest',
-  'text-moderation-stable',
-  'text-davinci-edit-001',
-  'text-embedding-v1',
-  'davinci-002',
-  'babbage-002',
-  'whisper-1',
-  'tts-1',
-  'tts-1-1106',
-  'tts-1-hd',
-  'tts-1-hd-1106',
-];
+const auxiliaryModels = require('./modules/auxiliaryModels'); 
 
 // 为辅助模型设置限流配置
 auxiliaryModels.forEach(model => {
@@ -883,6 +692,93 @@ const freeGeminiProxy = createProxyMiddleware({
   },
 });
 
+// 构建 chatnioRateLimiters 对象 (这个函数保持不变)
+function buildChatnioRateLimiters() {
+  const { commonLimits, customLimits } = chatnioRateLimits;
+
+  // 首先处理公共限流
+  for (const modelName in commonLimits.models) {
+      const modelConfig = commonLimits.models[modelName];
+      const limiters = modelConfig.limits.map(({ windowMs, max }) => {
+          return rateLimit({
+              windowMs,
+              max,
+              keyGenerator: (req) => {
+                const userId = req.body.user || req.headers['x-user-id'];
+                const userIP = req.body.user_ip || req.headers['x-user-ip'] || req.ip;
+                   return `chatnio-${modelName}-${userId}-${userIP}`; // 独立的 key
+              },
+              handler: (req, res) => {
+                  console.log(`Chatnio request for model ${modelName} from ${req.ip} has been rate limited.`);
+                  return res.status(400).json({ error: '4296 请求频繁，请稍后再试.' });
+              },
+          });
+      });
+
+      // 添加每日限制 (使用独立的 key)
+      limiters.push((req, res, next) => {
+          const now = moment().startOf('day');
+          const userId = req.body.user || req.headers['x-user-id'];
+          const userIP = req.body.user_ip || req.headers['x-user-ip'] || req.ip;
+          const key = `chatnio-${modelName}-${userId}-${userIP}-${now.format('YYYY-MM-DD')}`; // 独立的 key
+          dailyRequestCounts[key] = dailyRequestCounts[key] || 0;
+
+          if (dailyRequestCounts[key] >= modelConfig.dailyLimit) {
+              console.log(`Daily request limit reached for model ${modelName} for Chatnio`);
+              return res.status(400).json({ error: `4297 今天${modelName} 模型总的请求次数已达上限` });
+          }
+
+          dailyRequestCounts[key]++;
+          next();
+      });
+
+      chatnioRateLimiters[modelName] = limiters;
+  }
+
+  // 处理自定义限流 (逻辑与之前类似，但 key 使用 identifier)
+  for (const identifier in customLimits) {
+      const userLimits = customLimits[identifier];
+      for (const modelName in userLimits) {
+          const modelConfig = userLimits[modelName];
+           if (modelConfig && modelConfig.limits) {
+              const limiters = modelConfig.limits.map(({ windowMs, max }) => {
+                  return rateLimit({
+                      windowMs,
+                      max,
+                      keyGenerator: (req) => {
+                          // 使用 identifier (userId 或 IP) 作为 key 的一部分
+                          return `chatnio-${modelName}-${identifier}`;
+                      },
+                      handler: (req, res) => {
+                          console.log(`Custom Chatnio request limit reached for model ${modelName} and identifier ${identifier}`);
+                          return res.status(400).json({ error: '4298 Custom limit reached.' });
+                      },
+                  });
+              });
+              // 添加每日限制
+              limiters.push((req, res, next) => {
+                  const now = moment().startOf('day');
+                 
+                  const key = `chatnio-${modelName}-${identifier}-${now.format('YYYY-MM-DD')}`; // 独立的 key
+                  dailyRequestCounts[key] = dailyRequestCounts[key] || 0;
+
+                  if (dailyRequestCounts[key] >= modelConfig.dailyLimit) {
+                      console.log(`Custom daily request limit reached for model ${modelName} and identifier ${identifier}`);
+                      return res.status(400).json({ error: '4299 Custom daily limit reached.' });
+                  }
+
+                  dailyRequestCounts[key]++;
+                  next();
+              });
+              // 如果自定义限制中已经有这个模型了，就合并；否则，直接赋值
+                chatnioRateLimiters[modelName] = chatnioRateLimiters[modelName] ? [...chatnioRateLimiters[modelName], ...limiters] : limiters;
+          }   
+      }
+  }
+}
+
+buildChatnioRateLimiters(); // 构建 chatnioRateLimiters 对象
+
 app.use(restrictGeminiModelAccess); // 应用 restrictGeminiModelAccess 中间件
 
 // 应用 /free/gemini 代理中间件
@@ -1002,8 +898,56 @@ app.use('/chatnio', (req, res, next) => {
   }
 });
 
-// 应用 /chatnio 代理中间件
-app.use('/chatnio', chatnioProxy);
+// 在 /chatnio 路由中使用限流中间件
+app.use('/chatnio', (req, res, next) => {
+  const userId = req.body.user || req.headers['x-user-id'];
+  const userIP = req.body.user_ip || req.headers['x-user-ip'] || req.ip;
+  const modelName = req.body.model;
+
+  const { commonLimits, customLimits } = chatnioRateLimits;
+
+  // 优先检查自定义限制
+    let rateLimitersToApply = [];
+  if(customLimits[userId] && customLimits[userId][modelName]){
+      console.log(`Applying custom rate limits for user ${userId} and model ${modelName}`);
+      rateLimitersToApply = chatnioRateLimiters[modelName] || [];
+  }
+  else if(customLimits[userIP] && customLimits[userIP][modelName]){
+       console.log(`Applying custom rate limits for userIP ${userIP} and model ${modelName}`);
+       rateLimitersToApply = chatnioRateLimiters[modelName] || [];
+  }
+  //否则检查是否在公共限制名单中
+  else if (commonLimits.restrictedUserIds.includes(userId) || commonLimits.restrictedIPs.includes(userIP)) {
+      if(chatnioRateLimiters[modelName])
+      {
+           console.log(`Applying common rate limits for user/IP ${userId || userIP} and model ${modelName}`);
+            rateLimitersToApply = chatnioRateLimiters[modelName];
+      }
+  }
+  // 应用选定的限流器 (只应用 chatnioRateLimiters)
+  if (rateLimitersToApply.length>0) {
+      (async () => {
+          try {
+              await Promise.all(rateLimitersToApply.map(limiter =>
+                  new Promise((resolve, reject) => {
+                      limiter(req, res, (err) => {
+                          if (err) {
+                              reject(err);
+                          } else {
+                              resolve();
+                          }
+                      });
+                  })
+              ));
+              next(); // 所有限流器都通过
+          } catch (err) {
+              // 限流器已处理错误
+          }
+      })();
+  } else {
+      next(); // 没有适用的 chatnio 限流器
+  }
+}, chatnioProxy);
 
 // freelyaiProxy
 app.use('/freelyai', freelyaiProxy);

@@ -1,0 +1,22 @@
+// auxiliaryModels.js
+module.exports = [
+    'text-embedding-ada-002',
+    'text-embedding-3-small',
+    'text-embedding-3-large',
+    'text-curie-001',
+    'text-babbage-001',
+    'text-ada-001',
+    'text-davinci-002',
+    'text-davinci-003',
+    'text-moderation-latest',
+    'text-moderation-stable',
+    'text-davinci-edit-001',
+    'text-embedding-v1',
+    'davinci-002',
+    'babbage-002',
+    'whisper-1',
+    'tts-1',
+    'tts-1-1106',
+    'tts-1-hd',
+    'tts-1-hd-1106',
+  ];
