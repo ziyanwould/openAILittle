@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2025-03-08 23:46:42
+ * @LastEditTime: 2025-03-09 00:06:45
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -692,88 +692,141 @@ const freeGeminiProxy = createProxyMiddleware({
   },
 });
 
-// 构建 chatnioRateLimiters 对象 (这个函数保持不变)
+// 构建 chatnioRateLimiters 对象
 function buildChatnioRateLimiters() {
   const { commonLimits, customLimits } = chatnioRateLimits;
 
   // 首先处理公共限流
   for (const modelName in commonLimits.models) {
-      const modelConfig = commonLimits.models[modelName];
-      const limiters = modelConfig.limits.map(({ windowMs, max }) => {
-          return rateLimit({
-              windowMs,
-              max,
-              keyGenerator: (req) => {
-                const userId = req.body.user || req.headers['x-user-id'];
-                const userIP = req.body.user_ip || req.headers['x-user-ip'] || req.ip;
-                   return `chatnio-${modelName}-${userId}-${userIP}`; // 独立的 key
-              },
-              handler: (req, res) => {
-                  console.log(`Chatnio request for model ${modelName} from ${req.ip} has been rate limited.`);
-                  return res.status(400).json({ error: '4296 请求频繁，请稍后再试.' });
-              },
-          });
-      });
-
-      // 添加每日限制 (使用独立的 key)
-      limiters.push((req, res, next) => {
-          const now = moment().startOf('day');
+    const modelConfig = commonLimits.models[modelName];
+    const limiters = modelConfig.limits.map(({ windowMs, max }) => {
+      return rateLimit({
+        windowMs,
+        max,
+        keyGenerator: (req) => {
           const userId = req.body.user || req.headers['x-user-id'];
           const userIP = req.body.user_ip || req.headers['x-user-ip'] || req.ip;
-          const key = `chatnio-${modelName}-${userId}-${userIP}-${now.format('YYYY-MM-DD')}`; // 独立的 key
+          return `chatnio-${modelName}-${userId}-${userIP}`; // 独立的 key
+        },
+        handler: (req, res) => {
+          // 构建更详细的消息，包含时间窗口和次数
+          const duration = moment.duration(windowMs);
+          const formattedDuration = [
+            duration.days() > 0 ? `${duration.days()} 天` : '',
+            duration.hours() > 0 ? `${duration.hours()} 小时` : '',
+            duration.minutes() > 0 ? `${duration.minutes()} 分钟` : '',
+            duration.seconds() > 0 ? `${duration.seconds()} 秒` : '',
+          ].filter(Boolean).join(' ');
+
+            const logMessage = `${moment().format('YYYY-MM-DD HH:mm:ss')} [ChatNio] ${req.ip} 对模型 ${modelName} 的请求已被限制。原因：超过 ${formattedDuration} 内 ${max} 次的限制。`;
+
+          console.log(logMessage);
+          return res.status(429).json({  // 使用 429 Too Many Requests
+            error: {
+              message: `请求过于频繁，请在 ${formattedDuration} 后重试。`,
+              type: "rate_limit_exceeded",
+              param: null,
+              code: "4296"  // 自定义错误码
+            }
+          });
+        },
+      });
+    });
+
+    // 添加每日限制 (使用独立的 key)
+    limiters.push((req, res, next) => {
+      const now = moment().startOf('day');
+      const userId = req.body.user || req.headers['x-user-id'];
+      const userIP = req.body.user_ip || req.headers['x-user-ip'] || req.ip;
+      const key = `chatnio-${modelName}-${userId}-${userIP}-${now.format('YYYY-MM-DD')}`; // 独立的 key
+      dailyRequestCounts[key] = dailyRequestCounts[key] || 0;
+
+      if (dailyRequestCounts[key] >= modelConfig.dailyLimit) {
+          const logMessage = `${moment().format('YYYY-MM-DD HH:mm:ss')} [ChatNio] ${req.ip} 对模型 ${modelName} 的请求已达到每日 ${modelConfig.dailyLimit} 次的限制。`;
+        console.log(logMessage);
+        return res.status(429).json({  // 使用 429 Too Many Requests
+          error: {
+            message: `今天模型 ${modelName} 的请求次数已达上限，请明天再试。`,
+            type: "daily_rate_limit_exceeded",
+            param: null,
+            code: "4297"  // 自定义错误码
+          }
+        });
+      }
+
+      dailyRequestCounts[key]++;
+      next();
+    });
+
+    chatnioRateLimiters[modelName] = limiters;
+  }
+
+  // 处理自定义限流
+  for (const identifier in customLimits) {
+    const userLimits = customLimits[identifier];
+    for (const modelName in userLimits) {
+      const modelConfig = userLimits[modelName];
+      if (modelConfig && modelConfig.limits) {
+        const limiters = modelConfig.limits.map(({ windowMs, max }) => {
+          return rateLimit({
+            windowMs,
+            max,
+            keyGenerator: (req) => {
+              // 使用 identifier (userId 或 IP) 作为 key 的一部分
+              return `chatnio-${modelName}-${identifier}`;
+            },
+            handler: (req, res) => {
+              // 构建更详细的消息，包含时间窗口和次数
+              const duration = moment.duration(windowMs);
+              const formattedDuration = [
+                duration.days() > 0 ? `${duration.days()} 天` : '',
+                duration.hours() > 0 ? `${duration.hours()} 小时` : '',
+                duration.minutes() > 0 ? `${duration.minutes()} 分钟` : '',
+                duration.seconds() > 0 ? `${duration.seconds()} 秒` : '',
+              ].filter(Boolean).join(' ');
+
+              const logMessage = `${moment().format('YYYY-MM-DD HH:mm:ss')} [ChatNio] 用户/IP ${identifier} 对模型 ${modelName} 的请求已被限制。原因：超过 ${formattedDuration} 内 ${max} 次的自定义限制。`;
+              console.log(logMessage);
+              return res.status(429).json({
+                error: {
+                  message: `您的请求过于频繁，请在 ${formattedDuration} 后重试。`,
+                  type: "custom_rate_limit_exceeded",
+                  param: null,
+                  code: "4298" // 自定义错误码
+                }
+              });
+            },
+          });
+        });
+        // 添加每日限制
+        limiters.push((req, res, next) => {
+          const now = moment().startOf('day');
+          const key = `chatnio-${modelName}-${identifier}-${now.format('YYYY-MM-DD')}`; // 独立的 key
           dailyRequestCounts[key] = dailyRequestCounts[key] || 0;
 
           if (dailyRequestCounts[key] >= modelConfig.dailyLimit) {
-              console.log(`Daily request limit reached for model ${modelName} for Chatnio`);
-              return res.status(400).json({ error: `4297 今天${modelName} 模型总的请求次数已达上限` });
+
+            const logMessage = `${moment().format('YYYY-MM-DD HH:mm:ss')} [ChatNio] 用户/IP ${identifier} 对模型 ${modelName} 的请求已达到每日 ${modelConfig.dailyLimit} 次的自定义限制。`;
+            console.log(logMessage);
+            return res.status(429).json({
+              error: {
+                message: `您今天对模型 ${modelName} 的请求次数已达上限，请明天再试。`,
+                type: "custom_daily_rate_limit_exceeded",
+                param: null,
+                code: "4299"  // 自定义错误码
+               }
+            });
           }
 
           dailyRequestCounts[key]++;
           next();
-      });
-
-      chatnioRateLimiters[modelName] = limiters;
-  }
-
-  // 处理自定义限流 (逻辑与之前类似，但 key 使用 identifier)
-  for (const identifier in customLimits) {
-      const userLimits = customLimits[identifier];
-      for (const modelName in userLimits) {
-          const modelConfig = userLimits[modelName];
-           if (modelConfig && modelConfig.limits) {
-              const limiters = modelConfig.limits.map(({ windowMs, max }) => {
-                  return rateLimit({
-                      windowMs,
-                      max,
-                      keyGenerator: (req) => {
-                          // 使用 identifier (userId 或 IP) 作为 key 的一部分
-                          return `chatnio-${modelName}-${identifier}`;
-                      },
-                      handler: (req, res) => {
-                          console.log(`Custom Chatnio request limit reached for model ${modelName} and identifier ${identifier}`);
-                          return res.status(400).json({ error: '4298 Custom limit reached.' });
-                      },
-                  });
-              });
-              // 添加每日限制
-              limiters.push((req, res, next) => {
-                  const now = moment().startOf('day');
-                 
-                  const key = `chatnio-${modelName}-${identifier}-${now.format('YYYY-MM-DD')}`; // 独立的 key
-                  dailyRequestCounts[key] = dailyRequestCounts[key] || 0;
-
-                  if (dailyRequestCounts[key] >= modelConfig.dailyLimit) {
-                      console.log(`Custom daily request limit reached for model ${modelName} and identifier ${identifier}`);
-                      return res.status(400).json({ error: '4299 Custom daily limit reached.' });
-                  }
-
-                  dailyRequestCounts[key]++;
-                  next();
-              });
-              // 如果自定义限制中已经有这个模型了，就合并；否则，直接赋值
-                chatnioRateLimiters[modelName] = chatnioRateLimiters[modelName] ? [...chatnioRateLimiters[modelName], ...limiters] : limiters;
-          }   
+        });
+        // 如果自定义限制中已经有这个模型了，就合并；否则，直接赋值
+        chatnioRateLimiters[modelName] = chatnioRateLimiters[modelName]
+          ? [...chatnioRateLimiters[modelName], ...limiters]
+          : limiters;
       }
+    }
   }
 }
 
@@ -909,18 +962,18 @@ app.use('/chatnio', (req, res, next) => {
   // 优先检查自定义限制
     let rateLimitersToApply = [];
   if(customLimits[userId] && customLimits[userId][modelName]){
-      console.log(`Applying custom rate limits for user ${userId} and model ${modelName}`);
+      console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [ChatNio] 正在为用户 ${userId} 和模型 ${modelName} 应用自定义限流。`);
       rateLimitersToApply = chatnioRateLimiters[modelName] || [];
   }
   else if(customLimits[userIP] && customLimits[userIP][modelName]){
-       console.log(`Applying custom rate limits for userIP ${userIP} and model ${modelName}`);
+       console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [ChatNio] 正在为 IP ${userIP} 和模型 ${modelName} 应用自定义限流。`);
        rateLimitersToApply = chatnioRateLimiters[modelName] || [];
   }
   //否则检查是否在公共限制名单中
   else if (commonLimits.restrictedUserIds.includes(userId) || commonLimits.restrictedIPs.includes(userIP)) {
       if(chatnioRateLimiters[modelName])
       {
-           console.log(`Applying common rate limits for user/IP ${userId || userIP} and model ${modelName}`);
+           console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [ChatNio] 正在为用户/IP ${userId || userIP} 和模型 ${modelName} 应用公共限流。`);
             rateLimitersToApply = chatnioRateLimiters[modelName];
       }
   }
@@ -945,6 +998,7 @@ app.use('/chatnio', (req, res, next) => {
           }
       })();
   } else {
+        console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [ChatNio] 对 ${modelName} 模型的请求没有匹配的限流规则。`);
       next(); // 没有适用的 chatnio 限流器
   }
 }, chatnioProxy);

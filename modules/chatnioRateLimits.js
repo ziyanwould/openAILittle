@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2025-03-08 22:37:05
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2025-03-08 23:34:29
+ * @LastEditTime: 2025-03-09 00:12:23
  * @FilePath: /openAILittle/modules/chatnioRateLimits.js
  * @Description: 
  * @
@@ -14,7 +14,7 @@ module.exports = {
     // 公共模型限制 (针对用户 ID 和 IP 地址的列表)
     commonLimits: {
       //受限的用户列表
-      restrictedUserIds: ['哥廷根', '菲尔', 'ggh1357', "root"],
+      restrictedUserIds: ['哥廷根', '菲尔', 'ggh1357', "114514"],
       //受限的IP地址列表
       restrictedIPs: ['34.94.175.65', '0.0.0.0'],
       //模型以及对应的限制
