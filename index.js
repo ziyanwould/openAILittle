@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2025-03-09 00:06:45
+ * @LastEditTime: 2025-03-15 21:26:24
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -17,11 +17,23 @@ const moment = require('moment');
 const crypto = require('crypto'); // 引入 crypto 模块
 const fs = require('fs');
 const url = require('url'); // 引入 url 模块
+const {
+  prepareDataForHashing,
+  isNaturalLanguage,
+  readSensitivePatternsFromFile,
+  detectSensitiveContent,
+  isTimestamp,
+  loadRestrictedUsersConfigFromFile
+ } = require('./utils');
+const modifyRequestBodyMiddleware  = require('./middleware/modifyRequestBodyMiddleware'); // 模型参数修正统一处理
 const { sendNotification } = require('./notices/pushDeerNotifier'); // 引入 pushDeerNotifier.js 文件中的 sendNotification 函数
 const { sendLarkNotification } = require('./notices/larkNotifier'); // 引入 pushDeerNotifier.js 文件中的 sendNotification 函数
 const chatnioRateLimits = require('./modules/chatnioRateLimits'); // 引入 chatnio 限流配置
-const chatnioRateLimiters = {}; // 用于存储 chatnio 的限流器
+const modelRateLimits = require('./modules/modelRateLimits'); // 定义不同模型的多重限流配置 Doubao-Seaweed
+const auxiliaryModels = require('./modules/auxiliaryModels'); // 定义辅助模型列表
+const limitRequestBodyLength = require('./middleware/limitRequestBodyLength'); // 引入文本长度限制中间件
 
+const chatnioRateLimiters = {}; // 用于存储 chatnio 的限流器
 // 在文件开头引入 dotenv
 require('dotenv').config();
 
@@ -30,16 +42,10 @@ const app = express();
 
 app.use(bodyParser.json({ limit: '100mb' }));
 
-// 定义不同模型的多重限流配置 Doubao-Seaweed
-const modelRateLimits = require('./modules/modelRateLimits'); 
-
-// 定义辅助模型列表
-const auxiliaryModels = require('./modules/auxiliaryModels'); 
-
 // 为辅助模型设置限流配置
 auxiliaryModels.forEach(model => {
   modelRateLimits[model] = {
-    limits: [{ windowMs: 10 * 60 * 1000, max: 20 }],
+    limits: [{ windowMs: 10 * 60 * 1000, max: 10 }],
     dailyLimit: 500,
   };
 });
@@ -59,127 +65,19 @@ const userRequestHistory = new Map();
 // 用于存储最近请求内容的哈希值和时间戳
 const recentRequestContentHashes = new Map();
 
-/**
- * 封装修改 req.body 的中间件函数 
- * 所以通道同一个名称在此处理
- * 不同渠道同一个名称处理，单独渠道请在铭凡aiFlow.js中单独处理
- */
-const modifyRequestBodyMiddleware = (req, res, next) => {
-  if (req.body && req.body.model) {
-    // 匹配 "huggingface/" 开头的模型，区分大小写
-    if (req.body.model.startsWith("huggingface/")) {
-      if (req.body.top_p !== undefined && req.body.top_p < 1) {
-        req.body.top_p = 0.5;
-      }
-    }
-    // 匹配 "Baichuan" 开头的模型，区分大小写
-    else if (req.body.model.startsWith("Baichuan")) {
-      req.body.frequency_penalty = 1;
-    }
-    // 匹配包含 "glm-4v" 的模型
-    else if (req.body.model.includes("glm-4v")) {
-      req.body.max_tokens = 1024;
-    }
-    // 匹配 "o3-mini" 模型，删除 top_p 参数
-    else if (req.body.model === "o3-mini") {
-      delete req.body.top_p;
-    }
-    else if (req.body.model === "o1-mini") {
-      delete req.body.top_p;
-    }
-  }
-  next();
-};
 // 定义白名单文件路径
 const whitelistFilePath = 'whitelist.json';
 // 初始化白名单 (用户ID和IP地址)
 let whitelistedUserIds = [];
 let whitelistedIPs = [];
-// 从文件中加载白名单
-function loadWhitelistFromFile(filePath) {
-  try {
-    const fileContent = fs.readFileSync(filePath, 'utf-8');
-    const whitelist = JSON.parse(fileContent);
-    whitelistedUserIds = whitelist.userIds || [];
-    whitelistedIPs = whitelist.ips || [];
-    console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Whitelist loaded: ${whitelistedUserIds.length} user IDs, ${whitelistedIPs.length} IPs`);
-  } catch (err) {
-    console.error(`Failed to load whitelist from ${filePath}:`, err);
-    whitelistedUserIds = [];
-    whitelistedIPs = [];
-  }
-}
+
 // 初次加载白名单
 loadWhitelistFromFile(whitelistFilePath);
 console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Next Whitelist loaded: ${whitelistedUserIds.toString()} user IDs, ${whitelistedIPs.toString()} IPs`);
-// 中间件函数，用于限制 req.body 文本长度
-const limitRequestBodyLength = (maxLength = 30000, errorMessage = '请求文本过长，请缩短后再试。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度') => {
-  return (req, res, next) => {
-    const userId = req.headers['x-user-id'] || req.body.user;
-    const userIP = req.headers['x-user-ip'] || req.body.user_ip || req.ip;
-
-    // 检查用户 ID 或 IP 是否在白名单中
-    if (whitelistedUserIds.includes(userId) || whitelistedIPs.includes(userIP)) {
-      console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Request from whitelisted user ${userId || userIP} - skipping length check.`);
-      next();
-      return;
-    }
-
-    let totalLength = 0;
-
-    // Gemini 格式
-    if (req.body.contents && Array.isArray(req.body.contents)) {
-      for (const contentItem of req.body.contents) {
-        if (contentItem.parts && Array.isArray(contentItem.parts)) {
-          for (const part of contentItem.parts) {
-            if (part.text) {
-              totalLength += String(part.text).length;
-            }
-          }
-        }
-      }
-    }
-    // 三方模型和 OpenAI 格式
-    else if (req.body.messages && Array.isArray(req.body.messages)) {
-      for (const message of req.body.messages) {
-        if (message.content) {
-          if (typeof message.content === 'string') {
-            totalLength += message.content.length;
-          } else if (Array.isArray(message.content)) {
-            for (const contentItem of message.content) {
-              if (contentItem.text) {
-                totalLength += String(contentItem.text).length;
-              }
-            }
-          } else if (typeof message.content === 'object' && message.content !== null && message.content.text) {
-            // 针对 content 为单个对象的情况
-            totalLength += String(message.content.text).length;
-          }
-        }
-      }
-    }
-
-    if (totalLength > maxLength) {
-      console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Request blocked: Text length exceeds limit (${totalLength} > ${maxLength}).`);
-      return res.status(400).json({
-        "error": {
-          "message": errorMessage,
-          "type": "invalid_request_error"
-        }
-      });
-    }
-
-    next();
-  };
-};
 // 应用文本长度限制中间件到 "/" 和 "/google" 路由
-const defaultLengthLimiter = limitRequestBodyLength();
+const defaultLengthLimiter = limitRequestBodyLength(10000, '请求文本过长，请缩短后再试。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度', whitelistedUserIds, whitelistedIPs);
 
-// 定义飞书通知函数 【已经迁移抽取到larkNotifier】
-// 定义 PushDeer 通知函数【已经迁移抽取到pushDeerNotifier】
-// 定义 NTFY 通知函数 【已经迁移抽取到ntfyNotifier】
-//钉钉 通知函数 【已经迁移抽取到dingtalkNotifier】
-
+// 通知类迁移到 notices
 async function notices(data, requestBody, ntfyTopic = 'robot') {
 
   let pushkey = 'PDU33066TepraNW9hJp3GP5NWPCVgVaGpoxtU3EMa';
@@ -202,17 +100,6 @@ async function notices(data, requestBody, ntfyTopic = 'robot') {
 
   sendNotification(data, requestBody, pushkey);
   sendLarkNotification(data, requestBody, webhookUrl);
-}
-
-// 从文件中加载受限用户配置
-function loadRestrictedUsersConfigFromFile(filePath) {
-  try {
-    const fileContent = fs.readFileSync(filePath, 'utf-8');
-    return JSON.parse(fileContent);
-  } catch (err) {
-    console.error(`Failed to load restricted users config from ${filePath}:`, err);
-    return {};
-  }
 }
 
 // 定义敏感词和黑名单文件路径
@@ -931,10 +818,10 @@ app.use('/chatnio', (req, res, next) => {
   // 检查用户 ID 是否为时间戳格式
   if (userId && isTimestamp(userId)) {
     // 时间戳格式的用户 ID，视为未登录用户
-    limitRequestBodyLength(4096, '未登录用户的请求文本过长，请登录后再试。')(req, res, next);
+    limitRequestBodyLength(4096, '未登录用户的请求文本过长，请登录后再试。',whitelistedUserIds, whitelistedIPs)(req, res, next);
   } else {
     // 其他用户 ID，视为已登录用户
-    limitRequestBodyLength(2000000, '请求文本过长，Token超出平台默认阈值，请缩短后再试。若有更高需求请联系网站管理员处理。')(req, res, next);
+    limitRequestBodyLength(2000000, '请求文本过长，Token超出平台默认阈值，请缩短后再试。若有更高需求请联系网站管理员处理。',whitelistedUserIds, whitelistedIPs)(req, res, next);
   }
   const userIP = req.body.user_ip || req.headers['x-user-ip'] || req.ip;
   // 检查用户 IP 是否在黑名单中
@@ -1206,7 +1093,7 @@ app.use('/', (req, res, next) => {
   // 检查是否为辅助模型的请求，并进行自然语言判断
   if (auxiliaryModels.includes(modelName)) {
     // 只允许用户 ID 为 undefined 的请求访问辅助模型
-    if (!req.body.user) {
+    if (req.body.user) {
       console.log(
         `${moment().format('YYYY-MM-DD HH:mm:ss')}  Request blocked for model: ${modelName || 'unknown'}  ip ${req.ip}  user ID is not undefined`
       );
@@ -1268,114 +1155,20 @@ app.use('/', (req, res, next) => {
   }
 }, openAIProxy);
 
-
-// 辅助函数，用于准备数据进行哈希计算
-function prepareDataForHashing(data) {
-  if (typeof data === 'string') {
-    return data;
-  } else if (Buffer.isBuffer(data)) {
-    return data;
-  } else if (Array.isArray(data)) {
-    // 递归处理嵌套数组
-    return data.map(prepareDataForHashing).join('');
-  } else if (typeof data === 'object' && data !== null) {
-    // 处理其他对象类型，例如包含 base64 编码图片数据的对象
-    // 你需要根据实际情况修改这部分代码
-    if (data.type && data.type.startsWith('image') && typeof data.image_url.url === 'string') {
-      const str = data.image_url.url;
-      const base64Image = str.replace(/^data:image\/\w+;base64,/, '');
-      return base64Image;
-    } else {
-      console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} prepareDataForHashing: 遇到了未处理的对象类型`, data);
-      return JSON.stringify(data);
-    }
-  } else {
-    // 处理其他数据类型
-    return String(data);
-  }
-}
-
-// 简单判断是否为自然语言
-// 使用最多的8种语言做判断，特别是中文和英文，判断其语句是否完整，是否是自然语言。
-function isNaturalLanguage(text) {
-  // 新增代码标记检测（防止代码片段误判）
-  const codePatterns = [
-    /console\.log\(/,    // JS代码
-    /def\s+\w+\(/,       // Python函数
-    /<\?php/,            // PHP代码
-    /<\/?div>/           // HTML标签
-  ];
-
-  if (codePatterns.some(pattern => pattern.test(text))) {
-    return false;
-  }
-  // 定义支持的语言及其对应的正则表达式
-  const languageRegexMap = {
-    'english': /^[A-Za-z0-9,.!?\s]+$/, // 英文：字母、数字、标点符号和空格
-    'chinese': /^[\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef0-9,.!?\s]+$/, // 中文：汉字、标点符号和空格
-    'chinese-english': /^[A-Za-z0-9\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef,.!?\s]+$/, // 中英文混合：字母、数字、汉字、标点符号和空格
-    'spanish': /^[A-Za-z0-9áéíóúüñÁÉÍÓÚÜÑ,.!?\s]+$/, // 西班牙语：字母、数字、标点符号、特殊字符和空格
-    'french': /^[A-Za-z0-9àâäçéèêëîïôöùûüÿœæÀÂÄÇÉÈÊËÎÏÔÖÙÛÜŸŒÆ,.!?\s]+$/, // 法语：字母、数字、标点符号、特殊字符和空格
-    'german': /^[A-Za-z0-9äöüßÄÖÜẞ,.!?\s]+$/, // 德语：字母、数字、标点符号、特殊字符和空格
-    'russian': /^[А-Яа-я0-9,.!?\s]+$/, // 俄语：西里尔字母、数字、标点符号和空格
-    'portuguese': /^[A-Za-z0-9áàâãçéèêíìîóòôõúùûüÁÀÂÃÇÉÈÊÍÌÎÓÒÔÕÚÙÛÜ,.!?\s]+$/, // 葡萄牙语：字母、数字、标点符号、特殊字符和空格
-    'arabic': /^[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\s]+$/, // 阿拉伯语：阿拉伯字符和空格
-  };
-
-  // 遍历支持的语言，检查文本是否匹配
-  for (const [language, regex] of Object.entries(languageRegexMap)) {
-    if (regex.test(text)) {
-      console.log(`Detected language: ${language}`);
-      return true;
-    }
-  }
-
-  // 如果不匹配任何一种语言，则判断是否为Markdown格式
-  // 这里只是一个简单的Markdown判断，可以根据需要进行更复杂的判断
-  if (text.includes('**') || text.includes('##') || text.includes('[link](url)')) {
-    return true;
-  }
-
-  // 如果没有匹配到任何语言，则认为不是自然语言
-  return false;
-}
-
-// 从文件中读取敏感模式的函数
-function readSensitivePatternsFromFile(filename) {
+// 从文件中加载白名单
+function loadWhitelistFromFile(filePath) {
   try {
-    const data = fs.readFileSync(filename, 'utf8');
-    const patterns = JSON.parse(data).map(item => ({
-      pattern: new RegExp(item.pattern, 'g'),
-      description: item.description
-    }));
-    return patterns;
+    const fileContent = fs.readFileSync(filePath, 'utf-8');
+    const whitelist = JSON.parse(fileContent);
+    whitelistedUserIds = whitelist.userIds || [];
+    whitelistedIPs = whitelist.ips || [];
+    console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Whitelist loaded: ${whitelistedUserIds.length} user IDs, ${whitelistedIPs.length} IPs`);
   } catch (err) {
-    console.error(`Error reading file ${filename}:`, err);
-    return [];
+    console.error(`Failed to load whitelist from ${filePath}:`, err);
+    whitelistedUserIds = [];
+    whitelistedIPs = [];
   }
 }
-
-// 使用模式检测敏感内容的功能
-function detectSensitiveContent(text, patterns) {
-  for (let i = 0; i < patterns.length; i++) {
-    if (text.search(patterns[i].pattern) !== -1) {
-      return true;
-    }
-  }
-  return false;
-}
-
-// 辅助函数，用于检查字符串是否为时间戳格式，并允许一定的误差
-function isTimestamp(str, allowedErrorMs = 10 * 60 * 1000) {
-  const timestamp = parseInt(str, 10) * 1000; //  毫秒级时间戳
-  if (isNaN(timestamp)) {
-    return false;
-  }
-  // 增加时间范围的校验，需要用户传过来的就是当前时间附近的时间戳
-  const currentTime = Date.now();
-  return Math.abs(currentTime - timestamp) <= allowedErrorMs;
-}
-
 
 // 监听端口
 const PORT = 20491;
