@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2025-03-15 21:26:24
+ * @LastEditTime: 2025-03-16 02:35:38
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -32,6 +32,7 @@ const chatnioRateLimits = require('./modules/chatnioRateLimits'); // 引入 chat
 const modelRateLimits = require('./modules/modelRateLimits'); // 定义不同模型的多重限流配置 Doubao-Seaweed
 const auxiliaryModels = require('./modules/auxiliaryModels'); // 定义辅助模型列表
 const limitRequestBodyLength = require('./middleware/limitRequestBodyLength'); // 引入文本长度限制中间件
+const loggingMiddleware = require('./middleware/loggingMiddleware'); // 引入日志中间件
 
 const chatnioRateLimiters = {}; // 用于存储 chatnio 的限流器
 // 在文件开头引入 dotenv
@@ -720,6 +721,8 @@ function buildChatnioRateLimiters() {
 buildChatnioRateLimiters(); // 构建 chatnioRateLimiters 对象
 
 app.use(restrictGeminiModelAccess); // 应用 restrictGeminiModelAccess 中间件
+
+app.use(loggingMiddleware);  // <-- 中间件已优化为异步无阻塞
 
 // 应用 /free/gemini 代理中间件
 app.use('/freegemini', freeGeminiProxy);
