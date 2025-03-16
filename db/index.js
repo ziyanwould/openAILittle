@@ -1,6 +1,6 @@
-// db.js
+//db/index.js
 const mysql = require('mysql2/promise');
-const modelRateLimits = require('../modules/modelRateLimits'); 
+const modelRateLimits = require('../modules/modelRateLimits');
 const auxiliaryModels = require('../modules/auxiliaryModels'); // 定义辅助模型列表
 require('dotenv').config();
 
@@ -57,7 +57,7 @@ async function initializeDatabase() {
         token_prefix VARCHAR(5),
         token_suffix VARCHAR(3),
         route VARCHAR(50) NOT NULL,
-        content TEXT,
+        content MEDIUMTEXT,
         is_restricted BOOLEAN DEFAULT FALSE,
         INDEX idx_timestamp (timestamp),
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
@@ -88,6 +88,18 @@ async function initializeDatabase() {
     `);
     console.log('✓ audit_logs 表初始化完成');
 
+    // 对话历史记录表 (新增)
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS conversation_logs (
+        conversation_id INT AUTO_INCREMENT PRIMARY KEY,
+        request_id INT,
+        messages JSON NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (request_id) REFERENCES requests(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+    console.log('✓ conversation_logs 表初始化完成');
+
     // ==================== 创建索引 ====================
     console.log('[4/5] 创建索引');
     const indexConfig = [
@@ -100,10 +112,10 @@ async function initializeDatabase() {
     for (const index of indexConfig) {
       try {
         const [existing] = await connection.query(
-          `SHOW INDEX FROM ${index.table} WHERE Key_name = ?`, 
+          `SHOW INDEX FROM ${index.table} WHERE Key_name = ?`,
           [index.name]
         );
-        
+
         if (existing.length === 0) {
           await connection.query(
             `CREATE INDEX ${index.name} ON ${index.table}(${index.columns})`
@@ -121,18 +133,16 @@ async function initializeDatabase() {
     // ==================== 基础数据初始化 ====================
     console.log('[5/5] 初始化基础数据');
     await connection.query(
-      `INSERT IGNORE INTO restricted_models (model_name) VALUES 
+      `INSERT IGNORE INTO restricted_models (model_name) VALUES
       ('gpt-4'), ('dall-e-3'), ('text-moderation')`
     );
 
-
-    
     // 获取所有需要同步的模型
     const restrictedModels = [
         ...Object.keys(modelRateLimits),
         ...auxiliaryModels // 如果 auxiliaryModels 需要单独处理
     ];
-        
+
     // 去重并同步到数据库
     const uniqueModels = [...new Set(restrictedModels)];
     await syncRestrictedModels(uniqueModels);
@@ -186,17 +196,17 @@ async function isRestrictedModel(model) {
  */
 async function findOrCreateUser(userId) {
   if (!userId) return null;
-  
+
   try {
     // 匿名用户检测逻辑
     const isAnonymous = /^\d{13}$/.test(userId); // 简化示例
-    
+
     await pool.query(
-      `INSERT INTO users (id, username, is_anonymous) 
+      `INSERT INTO users (id, username, is_anonymous)
       VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE id=id`,
       [userId, isAnonymous ? 'Anonymous' : userId, isAnonymous]
     );
-    
+
     return userId;
   } catch (userErr) {
     console.error('用户操作失败:', userErr.message);
@@ -209,7 +219,7 @@ async function syncRestrictedModels(modelList) {
     let connection;
     try {
       connection = await pool.getConnection();
-      
+
       // 批量插入去重模型名
       if (modelList.length > 0) {
         const values = modelList.map(name => [name]);
