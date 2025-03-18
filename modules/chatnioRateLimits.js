@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2025-03-08 22:37:05
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2025-03-09 00:12:23
+ * @LastEditTime: 2025-03-18 22:27:40
  * @FilePath: /openAILittle/modules/chatnioRateLimits.js
  * @Description: 
  * @
@@ -28,10 +28,17 @@ module.exports = {
         },
          'gpt-4o-mini': {
           limits: [
-            { windowMs: 60 * 1000, max: 3 }, // 1 分钟内最多 5 次
+            { windowMs: 90 * 1000, max: 3 }, // 1 分钟内最多 5 次
            // { windowMs: 60 * 60 * 1000, max: 100 }, // 1 小时内最多 100 次
           ],
           dailyLimit: 500,
+        },
+        'gpt-4-share': {
+          limits: [
+            { windowMs: 60 * 1000, max: 1 }, // 1 分钟内最多 5 次
+            { windowMs: 60 * 60 * 1000, max: 1 }, // 1 小时内最多 100 次
+          ],
+          dailyLimit: 1,
         },
         // ... 其他公共限制的模型 ...
       },

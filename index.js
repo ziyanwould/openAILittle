@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2025-03-16 02:35:38
+ * @LastEditTime: 2025-03-18 22:37:24
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -76,7 +76,7 @@ let whitelistedIPs = [];
 loadWhitelistFromFile(whitelistFilePath);
 console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Next Whitelist loaded: ${whitelistedUserIds.toString()} user IDs, ${whitelistedIPs.toString()} IPs`);
 // 应用文本长度限制中间件到 "/" 和 "/google" 路由
-const defaultLengthLimiter = limitRequestBodyLength(10000, '请求文本过长，请缩短后再试。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度', whitelistedUserIds, whitelistedIPs);
+const defaultLengthLimiter = limitRequestBodyLength(15000, '请求文本过长，请缩短后再试。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度', whitelistedUserIds, whitelistedIPs);
 
 // 通知类迁移到 notices
 async function notices(data, requestBody, ntfyTopic = 'robot') {
