@@ -2,8 +2,8 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2025-03-18 22:37:24
- * @FilePath: /openAILittle/index.js
+ * @LastEditTime: 2025-03-24 00:47:56
+ * @FilePath: /openAILittle-1/index.js
  * @Description: 
  * @
  * @Copyright (c) 2024 by ${git_name_email}, All Rights Reserved. 
@@ -597,6 +597,8 @@ function buildChatnioRateLimiters() {
           return `chatnio-${modelName}-${userId}-${userIP}`; // 独立的 key
         },
         handler: (req, res) => {
+          const userId = req.body.user || req.headers['x-user-id'];
+          const userIP = req.body.user_ip || req.headers['x-user-ip'] || req.ip;
           // 构建更详细的消息，包含时间窗口和次数
           const duration = moment.duration(windowMs);
           const formattedDuration = [
@@ -606,7 +608,7 @@ function buildChatnioRateLimiters() {
             duration.seconds() > 0 ? `${duration.seconds()} 秒` : '',
           ].filter(Boolean).join(' ');
 
-            const logMessage = `${moment().format('YYYY-MM-DD HH:mm:ss')} [ChatNio] ${req.ip} 对模型 ${modelName} 的请求已被限制。原因：超过 ${formattedDuration} 内 ${max} 次的限制。`;
+          const logMessage = `${moment().format('YYYY-MM-DD HH:mm:ss')} [ChatNio] ${userIP} / ${userId} 对模型 ${modelName} 的请求已被限制。原因：超过 ${formattedDuration} 内 ${max} 次的限制。`;
 
           console.log(logMessage);
           return res.status(429).json({  // 使用 429 Too Many Requests
@@ -630,7 +632,7 @@ function buildChatnioRateLimiters() {
       dailyRequestCounts[key] = dailyRequestCounts[key] || 0;
 
       if (dailyRequestCounts[key] >= modelConfig.dailyLimit) {
-          const logMessage = `${moment().format('YYYY-MM-DD HH:mm:ss')} [ChatNio] ${req.ip} 对模型 ${modelName} 的请求已达到每日 ${modelConfig.dailyLimit} 次的限制。`;
+          const logMessage = `${moment().format('YYYY-MM-DD HH:mm:ss')} [ChatNio] ${userIP} 对模型 ${modelName} 的请求已达到每日 ${modelConfig.dailyLimit} 次的限制。`;
         console.log(logMessage);
         return res.status(429).json({  // 使用 429 Too Many Requests
           error: {
@@ -863,7 +865,7 @@ app.use('/chatnio', (req, res, next) => {
   else if (commonLimits.restrictedUserIds.includes(userId) || commonLimits.restrictedIPs.includes(userIP)) {
       if(chatnioRateLimiters[modelName])
       {
-           console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [ChatNio] 正在为用户/IP ${userId || userIP} 和模型 ${modelName} 应用公共限流。`);
+           console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [ChatNio] 正在为用户/IP ${userId}/${userIP} 和模型 ${modelName} 应用公共限流。`);
             rateLimitersToApply = chatnioRateLimiters[modelName];
       }
   }

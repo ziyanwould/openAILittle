@@ -2,8 +2,8 @@
  * @Author: Liu Jiarong
  * @Date: 2025-03-08 22:37:05
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2025-03-18 22:27:40
- * @FilePath: /openAILittle/modules/chatnioRateLimits.js
+ * @LastEditTime: 2025-03-24 00:48:43
+ * @FilePath: /openAILittle-1/modules/chatnioRateLimits.js
  * @Description: 
  * @
  * @Copyright (c) 2025 by ${git_name_email}, All Rights Reserved. 
@@ -16,7 +16,7 @@ module.exports = {
       //受限的用户列表
       restrictedUserIds: ['哥廷根', '菲尔', 'ggh1357', "114514"],
       //受限的IP地址列表
-      restrictedIPs: ['34.94.175.65', '0.0.0.0'],
+      restrictedIPs: ['34.94.175.65', '0.0.0.0',"103.143.238.221","34.94.142.229"],
       //模型以及对应的限制
       models: {
         'gpt-4-turbo': {
@@ -28,7 +28,7 @@ module.exports = {
         },
          'gpt-4o-mini': {
           limits: [
-            { windowMs: 90 * 1000, max: 3 }, // 1 分钟内最多 5 次
+            { windowMs: 120 * 1000, max: 1 }, // 1 分钟内最多 5 次
            // { windowMs: 60 * 60 * 1000, max: 100 }, // 1 小时内最多 100 次
           ],
           dailyLimit: 500,
@@ -39,6 +39,13 @@ module.exports = {
             { windowMs: 60 * 60 * 1000, max: 1 }, // 1 小时内最多 100 次
           ],
           dailyLimit: 1,
+        },
+        'gemini-2.0-flash': {
+          limits: [
+            { windowMs: 180 * 1000, max: 1 }, // 1 分钟内最多 5 次
+            { windowMs: 60 * 60 * 1000, max: 30 }, // 1 小时内最多 100 次
+          ],
+          dailyLimit: 200,
         },
         // ... 其他公共限制的模型 ...
       },
