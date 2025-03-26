@@ -179,4 +179,11 @@ module.exports = {
       ],
       dailyLimit: 800, // Doubao-pro-4k 每天总限制 120 次
     },
+    'gpt-4.5-preview': {
+      limits: [
+        { windowMs: 1 * 60 * 1000, max: 1 },
+        { windowMs: 60 * 60 * 1000, max: 3 },
+      ],
+      dailyLimit: 300, // Doubao-pro-4k 每天总限制 120 次
+    },
   };
