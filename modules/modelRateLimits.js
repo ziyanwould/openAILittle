@@ -172,4 +172,11 @@ module.exports = {
       ],
       dailyLimit: 50, // Doubao-pro-4k 每天总限制 120 次
     },
+    'gemini-2.5-pro-exp-03-25': {
+      limits: [
+        { windowMs: 1 * 60 * 1000, max: 2 },
+        { windowMs: 30 * 60 * 1000, max: 10 },
+      ],
+      dailyLimit: 800, // Doubao-pro-4k 每天总限制 120 次
+    },
   };

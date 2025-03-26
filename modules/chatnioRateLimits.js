@@ -14,7 +14,7 @@ module.exports = {
     // 公共模型限制 (针对用户 ID 和 IP 地址的列表)
     commonLimits: {
       //受限的用户列表
-      restrictedUserIds: ['哥廷根', '菲尔', 'ggh1357', "114514"],
+      restrictedUserIds: ['哥廷根', '菲尔', 'ggh1357', "114514", "47890", "模糊1", "边防官兵"],
       //受限的IP地址列表
       restrictedIPs: ['34.94.175.65', '0.0.0.0',"103.143.238.221","34.94.142.229"],
       //模型以及对应的限制
@@ -53,13 +53,48 @@ module.exports = {
   
     // 自定义用户/IP 限制 (覆盖公共限制)
     customLimits: {
-      'user789': { // 用户 ID
-        'gpt-4-turbo': {
+      '47890': { // 用户 ID
+        'gpt-4o-mini': {
           limits: [
-            { windowMs: 60 * 1000, max: 10 }, //  user789 gpt-4-turbo 1 分钟 10 次
-            { windowMs: 3600 * 1000, max: 200}
+            { windowMs: 300 * 1000, max: 1 }, // 1 分钟内最多 5 次
           ],
-          dailyLimit: 1000,
+          dailyLimit: 50,
+        },
+        'gemini-2.0-flash': {
+          limits: [
+            { windowMs: 600 * 1000, max: 1 },
+          ],
+          dailyLimit: 20,
+        },
+        // ... user789 的其他模型限制 ...
+      },
+      '模糊1': { // 用户 ID
+        'gpt-4o-mini': {
+          limits: [
+            { windowMs: 300 * 1000, max: 1 }, 
+          ],
+          dailyLimit: 50,
+        },
+        'gemini-2.0-flash': {
+          limits: [
+            { windowMs: 600 * 1000, max: 1 }, 
+          ],
+          dailyLimit: 200,
+        },
+        // ... user789 的其他模型限制 ...
+      },
+      '边防官兵': { // 用户 ID
+        'gpt-4o-mini': {
+          limits: [
+            { windowMs: 300 * 1000, max: 1 }, // 1 分钟内最多 5 次
+          ],
+          'gemini-2.0-flash': {
+          limits: [
+            { windowMs: 600 * 1000, max: 1 }, 
+          ],
+          dailyLimit: 200,
+        },
+          dailyLimit: 50,
         },
         // ... user789 的其他模型限制 ...
       },
