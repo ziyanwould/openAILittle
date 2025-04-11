@@ -186,4 +186,28 @@ module.exports = {
       ],
       dailyLimit: 300, // Doubao-pro-4k 每天总限制 120 次
     },
+    'Wan-AI/Wan2.1-I2V-14B-720P-Turbo': {
+      limits: [
+        { windowMs: 12 * 60 * 60 * 1000, max: 1 },
+      ],
+      dailyLimit: 15, 
+    },
+    'Wan-AI/Wan2.1-I2V-14B-720P': {
+      limits: [
+        { windowMs: 12 * 60 * 60 * 1000, max: 1 },
+      ],
+      dailyLimit: 15, 
+    },
+    'Wan-AI/Wan2.1-T2V-14B-Turbo': {
+      limits: [
+        { windowMs: 12 * 60 * 60 * 1000, max: 1 },
+      ],
+      dailyLimit: 15, 
+    },
+    'Wan-AI/Wan2.1-T2V-14B': {
+      limits: [
+        { windowMs: 12 * 60 * 60 * 1000, max: 1 },
+      ],
+      dailyLimit: 15, 
+    },
   };
