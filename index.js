@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2025-03-24 00:47:56
+ * @LastEditTime: 2025-04-14 23:02:35
  * @FilePath: /openAILittle-1/index.js
  * @Description: 
  * @
@@ -192,6 +192,15 @@ for (const modelName in modelRateLimits) {
         return key;
       },
       handler: (req, res) => {
+        const ip = req.body.user_ip || req.headers['x-user-ip'] || req.ip;
+        const userId = req.body.user || req.headers['x-user-id'];
+
+        // 检查是否在白名单中
+        if (whitelistedUserIds.includes(userId) || whitelistedIPs.includes(ip)) {
+          console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Whitelisted user ${userId} or IP ${ip} bypassed rate limit for model ${modelName}.`);
+          return; // 白名单用户或IP直接通过，不返回错误
+        }
+
         console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Request for model ${modelName} from ${req.ip} has been rate limited.`);
 
         const duration = moment.duration(windowMs);
@@ -226,6 +235,15 @@ for (const modelName in modelRateLimits) {
 
   // 添加每日总请求次数限制中间件
   rateLimiters[modelName].push((req, res, next) => {
+    const ip = req.body.user_ip || req.headers['x-user-ip'] || req.ip;
+    const userId = req.body.user || req.headers['x-user-id'];
+
+    // 检查是否在白名单中
+    if (whitelistedUserIds.includes(userId) || whitelistedIPs.includes(ip)) {
+      console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Whitelisted user ${userId} or IP ${ip} bypassed daily limit for model ${modelName}.`);
+      return next(); // 白名单用户或IP直接通过，不检查每日限制
+    }
+
     const now = moment().startOf('day'); // 获取今天零点时刻
     const key = `${modelName}-${now.format('YYYY-MM-DD')}`; // 当天请求计数的 key
 
@@ -509,9 +527,18 @@ const freelyaiProxy = createProxyMiddleware({
 //  googleProxy 中间件添加限流
 const googleRateLimiter = rateLimit({
   windowMs: 30 * 60 * 1000, // 30 分钟时间窗口
-  max: 20, // 允许 1 次请求
+  max: 20, // 允许 20 次请求
   keyGenerator: (req) => req.headers['x-user-ip'] || req.ip, // 使用 IP 地址作为限流键
   handler: (req, res) => {
+    const ip = req.body.user_ip || req.headers['x-user-ip'] || req.ip;
+    const userId = req.body.user || req.headers['x-user-id'];
+
+    // 检查是否在白名单中
+    if (whitelistedUserIds.includes(userId) || whitelistedIPs.includes(ip)) {
+      console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Whitelisted user ${userId} or IP ${ip} bypassed Google rate limit.`);
+      return; // 白名单用户或IP直接通过
+    }
+
     console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 4291 Gemini request from ${req.ip} has been rate limited.`);
     res.status(429).json({
       error: '4291 请求频繁，稍后再试。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度',

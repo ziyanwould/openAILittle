@@ -57,13 +57,26 @@ async function initializeDatabase() {
         token_prefix VARCHAR(5),
         token_suffix VARCHAR(3),
         route VARCHAR(50) NOT NULL,
-        content MEDIUMTEXT,
+        content LONGTEXT,
         is_restricted BOOLEAN DEFAULT FALSE,
         INDEX idx_timestamp (timestamp),
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
     console.log('✓ requests 表初始化完成');
+
+    // 检查并更新 content 字段类型为 LONGTEXT
+    const [columns] = await connection.query(
+      `SHOW COLUMNS FROM requests WHERE Field = 'content'`
+    );
+    if (columns.length > 0 && columns[0].Type.toLowerCase() !== 'longtext') {
+      await connection.query(`
+        ALTER TABLE requests MODIFY COLUMN content LONGTEXT;
+      `);
+      console.log('✓ content 字段已更新为 LONGTEXT 类型');
+    } else {
+      console.log('⭕ content 字段已经是 LONGTEXT 类型，无需更新');
+    }
 
     // 受限模型表
     await connection.query(`

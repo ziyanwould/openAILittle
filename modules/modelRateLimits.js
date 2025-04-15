@@ -210,4 +210,10 @@ module.exports = {
       ],
       dailyLimit: 15, 
     },
+    'dall-e-3': {
+      limits: [
+        { windowMs: 12 * 60 * 60 * 1000, max: 1 },
+      ],
+      dailyLimit: 3,
+    }
   };
