@@ -215,5 +215,23 @@ module.exports = {
         { windowMs: 12 * 60 * 60 * 1000, max: 1 },
       ],
       dailyLimit: 3,
+    },
+    'gpt-4.1': {
+      limits: [
+        { windowMs: 12 * 60 * 60 * 1000, max: 1 },
+      ],
+      dailyLimit: 10,
+    },
+    'gpt-4.1-mini': {
+      limits: [
+        { windowMs: 12 * 60 * 60 * 1000, max: 3 },
+      ],
+      dailyLimit: 120,
+    },
+    'gpt-4.1-nano': {
+      limits: [
+        { windowMs: 12 * 60 * 60 * 1000, max: 5 },
+      ],
+      dailyLimit: 100,
     }
   };
