@@ -233,5 +233,65 @@ module.exports = {
         { windowMs: 12 * 60 * 60 * 1000, max: 5 },
       ],
       dailyLimit: 100,
+    },
+    'Doubao-1.5-vision-lite': {
+      limits: [
+        { windowMs: 12 * 60 * 60 * 1000, max: 50 },
+      ],
+      dailyLimit: 1000,
+    },
+    'Doubao-1.5-vision-pro': {
+      limits: [
+        { windowMs: 12 * 60 * 60 * 1000, max: 30 },
+      ],
+      dailyLimit: 1000,
+    },
+    'Doubao-1.5-thinking-pro': {
+      limits: [
+        { windowMs: 12 * 60 * 60 * 1000, max: 20 },
+      ],
+      dailyLimit: 1200,
+    },
+    'Doubao-1.5-thinking-pro-m': {
+      limits: [
+        { windowMs: 12 * 60 * 60 * 1000, max: 20 },
+      ],
+      dailyLimit: 1000,
+    },
+    'GLM-Z1-32B': {
+      limits: [
+        { windowMs: 12 * 60 * 60 * 1000, max: 50 },
+      ],
+      dailyLimit: 1000,
+    },
+    'GLM-4-32B': {
+      limits: [
+        { windowMs: 12 * 60 * 60 * 1000, max: 30 },
+      ],
+      dailyLimit: 1000,
+    },
+    'Qwen3-235B-A22B': {
+      limits: [
+        { windowMs: 12 * 60 * 60 * 1000, max: 20 },
+      ],
+      dailyLimit: 1200,
+    },
+    'Qwen3-30B-A3B': {
+      limits: [
+        { windowMs: 12 * 60 * 60 * 1000, max: 20 },
+      ],
+      dailyLimit: 1000,
+    },
+    'Qwen3-32B': {
+      limits: [
+        { windowMs: 12 * 60 * 60 * 1000, max: 20 },
+      ],
+      dailyLimit: 1200,
+    },
+    'Qwen3-14B': {
+      limits: [
+        { windowMs: 12 * 60 * 60 * 1000, max: 20 },
+      ],
+      dailyLimit: 1000,
     }
   };
