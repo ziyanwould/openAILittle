@@ -293,5 +293,59 @@ module.exports = {
         { windowMs: 12 * 60 * 60 * 1000, max: 20 },
       ],
       dailyLimit: 1000,
-    }
+    },
+    'grok-3': {
+      limits: [
+        { windowMs: 24 * 60 * 60 * 1000, max: 3 },
+      ],
+      dailyLimit: 20,
+    },
+    'grok-3-mini': {
+      limits: [
+        { windowMs: 24 * 60 * 60 * 1000, max: 3 },
+      ],
+      dailyLimit: 20,
+    },
+    'grok-3-fast': {
+      limits: [
+        { windowMs: 24 * 60 * 60 * 1000, max: 3 },
+      ],
+      dailyLimit: 20,
+    },
+    'grok-3-mini-fast': {
+      limits: [
+        { windowMs: 24 * 60 * 60 * 1000, max: 3 },
+      ],
+      dailyLimit: 20,
+    },
+    'grok-2-vision-1212': {
+      limits: [
+        { windowMs: 24 * 60 * 60 * 1000, max: 3 },
+      ],
+      dailyLimit: 20,
+    },
+    'grok-beta': {
+      limits: [
+        { windowMs: 24 * 60 * 60 * 1000, max: 3 },
+      ],
+      dailyLimit: 20,
+    },
+    'grok-vision-beta': {
+      limits: [
+        { windowMs: 24 * 60 * 60 * 1000, max: 3 },
+      ],
+      dailyLimit: 20,
+    },
+    'grok-2-1212': {
+      limits: [
+        { windowMs: 24 * 60 * 60 * 1000, max: 3 },
+      ],
+      dailyLimit: 20,
+    },
+    'grok-2-image-1212': {
+      limits: [
+        { windowMs: 24 * 60 * 60 * 1000, max: 3 },
+      ],
+      dailyLimit: 20,
+    },
   };
