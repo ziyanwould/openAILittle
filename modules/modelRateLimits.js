@@ -366,4 +366,22 @@ module.exports = {
       ],
       totalLimit: 20,
     },
+    'claude-opus-4-20250514': {
+      limits: [
+        { windowMs: 24 * 60 * 60 * 1000, max: 1 },
+      ],
+      totalLimit: 5,
+    },
+    'claude-sonnet-4-20250514': {
+      limits: [
+        { windowMs: 24 * 60 * 60 * 1000, max: 1 },
+      ],
+      totalLimit: 5,
+    },
+    'o4-mini': {
+      limits: [
+        { windowMs: 24 * 60 * 60 * 1000, max: 5 },
+      ],
+      totalLimit: 50,
+    },
   };
