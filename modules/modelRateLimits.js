@@ -167,8 +167,8 @@ module.exports = {
     },
     'Doubao-Seaweed': {
       limits: [
-        { windowMs: 1 * 60 * 1000, max: 2 },
-        { windowMs: 30 * 60 * 1000, max: 5 },
+        { windowMs: 1 * 60 * 1000, max: 1 },
+        { windowMs: 30 * 60 * 1000, max: 3 },
       ],
       dailyLimit: 50, // Doubao-pro-4k 每天总限制 120 次
     },
@@ -236,25 +236,25 @@ module.exports = {
     },
     'Doubao-1.5-vision-lite': {
       limits: [
-        { windowMs: 12 * 60 * 60 * 1000, max: 50 },
+        { windowMs: 12 * 60 * 60 * 1000, max: 10 },
       ],
       dailyLimit: 1000,
     },
     'Doubao-1.5-vision-pro': {
       limits: [
-        { windowMs: 12 * 60 * 60 * 1000, max: 30 },
+        { windowMs: 12 * 60 * 60 * 1000, max: 10 },
       ],
       dailyLimit: 1000,
     },
     'Doubao-1.5-thinking-pro': {
       limits: [
-        { windowMs: 12 * 60 * 60 * 1000, max: 20 },
+        { windowMs: 12 * 60 * 60 * 1000, max: 10 },
       ],
       dailyLimit: 1200,
     },
     'Doubao-1.5-thinking-pro-m': {
       limits: [
-        { windowMs: 12 * 60 * 60 * 1000, max: 20 },
+        { windowMs: 12 * 60 * 60 * 1000, max: 10 },
       ],
       dailyLimit: 1000,
     },
@@ -347,5 +347,23 @@ module.exports = {
         { windowMs: 24 * 60 * 60 * 1000, max: 3 },
       ],
       dailyLimit: 20,
+    },
+    'doubao-1-5-pro-32k': {
+      limits: [
+        { windowMs: 24 * 60 * 60 * 1000, max: 3 },
+      ],
+      totalLimit: 20,
+    },
+    'doubao-1-5-lite-32k': {
+      limits: [
+        { windowMs: 24 * 60 * 60 * 1000, max: 3 },
+      ],
+      totalLimit: 20,
+    },
+    'doubao-1-5-vision-pro-32k': {
+      limits: [
+        { windowMs: 24 * 60 * 60 * 1000, max: 3 },
+      ],
+      totalLimit: 20,
     },
   };
