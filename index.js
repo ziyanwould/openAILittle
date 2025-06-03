@@ -46,6 +46,14 @@ if (process.env.FREELYAI_WHITELIST) {
     .filter(Boolean);
 }
 
+// 解析 ROBOT_WHITELIST 环境变量，支持等号分割取左边
+let robotModelWhitelist = [];
+if (process.env.ROBOT_WHITELIST) {
+  robotModelWhitelist = process.env.ROBOT_WHITELIST.split(',')
+    .map(item => item.split('=')[0].trim())
+    .filter(Boolean);
+}
+
 // Node.js 18 以上版本支持原生的 fetch API
 const app = express();
 
@@ -1081,6 +1089,18 @@ app.use('/', (req, res, next) => {
   }
 
   console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 请求处理完成，继续执行下一个中间件`);
+  next();
+});
+// / 路由模型白名单校验中间件，必须在所有 / 路由相关中间件之前
+app.use('/v1', (req, res, next) => {
+  // 只校验POST/PUT/PATCH等有body的请求
+  const method = req.method.toUpperCase();
+  if (["POST", "PUT", "PATCH"].includes(method)) {
+    const modelName = req.body && req.body.model;
+    if (!modelName || !robotModelWhitelist.includes(modelName)) {
+      return res.status(403).json({ error: '禁止请求该模型，未在ROBOT_WHITELIST白名单内。' });
+    }
+  }
   next();
 });
 // 中间件函数，根据请求参数应用不同的限流策略和过滤重复请求
