@@ -38,6 +38,14 @@ const chatnioRateLimiters = {}; // 用于存储 chatnio 的限流器
 // 在文件开头引入 dotenv
 require('dotenv').config();
 
+// 解析 FREELYAI_WHITELIST 环境变量，支持等号分割取左边
+let freelyaiModelWhitelist = [];
+if (process.env.FREELYAI_WHITELIST) {
+  freelyaiModelWhitelist = process.env.FREELYAI_WHITELIST.split(',')
+    .map(item => item.split('=')[0].trim())
+    .filter(Boolean);
+}
+
 // Node.js 18 以上版本支持原生的 fetch API
 const app = express();
 
@@ -494,6 +502,18 @@ const chatnioProxy = createProxyMiddleware({
   },
 });
 
+// freelyaiProxy 白名单校验中间件
+app.use('/freelyai', (req, res, next) => {
+  const method = req.method.toUpperCase();
+  if (["POST", "PUT", "PATCH"].includes(method)) {
+    const modelName = req.body && req.body.model;
+    if (!modelName || !freelyaiModelWhitelist.includes(modelName)) {
+      return res.status(403).json({ error: '禁止请求该模型，未在白名单内。' });
+    }
+  }
+  next();
+});
+
 // 创建 /freelyai 路径的代理中间件
 const freelyaiProxy = createProxyMiddleware({
   target: process.env.TARGET_SERVER, // 从环境变量中读取目标服务器地址
@@ -523,6 +543,7 @@ const freelyaiProxy = createProxyMiddleware({
     },
   },
 });
+app.use('/freelyai', freelyaiProxy);
 
 //  googleProxy 中间件添加限流
 const googleRateLimiter = rateLimit({
@@ -921,9 +942,6 @@ app.use('/chatnio', (req, res, next) => {
       next(); // 没有适用的 chatnio 限流器
   }
 }, chatnioProxy);
-
-// freelyaiProxy
-app.use('/freelyai', freelyaiProxy);
 
 // 限制请求体长度
 app.use('/', defaultLengthLimiter);
