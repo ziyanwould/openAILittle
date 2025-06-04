@@ -384,4 +384,46 @@ module.exports = {
       ],
       totalLimit: 50,
     },
+    'Doubao-1.5-pro-256k': {
+      limits: [
+        { windowMs: 24 * 60 * 60 * 1000, max: 5 },
+      ],
+      totalLimit: 100,
+    },
+    'Doubao-1.5-UI-TARS': {
+      limits: [
+        { windowMs: 24 * 60 * 60 * 1000, max: 5 },
+      ],
+      totalLimit: 100,
+    },
+    'glm-4-air-250414': {
+      limits: [
+        { windowMs: 24 * 60 * 60 * 1000, max: 50 },
+      ],
+      totalLimit: 500,
+    },
+    'glm-z1-air': {
+      limits: [
+        { windowMs: 24 * 60 * 60 * 1000, max: 50 },
+      ],
+      totalLimit: 500,
+    },
+    'glm-z1-flash': {
+      limits: [
+        { windowMs: 24 * 60 * 60 * 1000, max: 50 },
+      ],
+      totalLimit: 50,
+    },
+    'glm-z1-flashx': {
+      limits: [
+        { windowMs: 24 * 60 * 60 * 1000, max: 50 },
+      ],
+      totalLimit: 500,
+    },
+    'glm-4-flashx-250414': {
+      limits: [
+        { windowMs: 24 * 60 * 60 * 1000, max: 50 },
+      ],
+      totalLimit: 500,
+    },
   };
