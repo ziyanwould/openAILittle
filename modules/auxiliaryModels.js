@@ -1,3 +1,13 @@
+/**
+ * @Author: Liu Jiarong
+ * @Date: 2025-08-03 16:16:06
+ * @LastEditors: Liu Jiarong
+ * @LastEditTime: 2025-08-03 18:53:58
+ * @FilePath: /openAILittle/modules/auxiliaryModels.js
+ * @Description: 
+ * @
+ * @Copyright (c) 2025 by ${git_name_email}, All Rights Reserved. 
+ */
 // auxiliaryModels.js
 module.exports = [
     'text-embedding-ada-002',
@@ -14,8 +24,6 @@ module.exports = [
     'text-embedding-v1',
     'davinci-002',
     'babbage-002',
-    'whisper-1',
-    'tts-1',
     'tts-1-1106',
     'tts-1-hd',
     'tts-1-hd-1106',

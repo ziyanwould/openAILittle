@@ -163,6 +163,25 @@ TARGET_SERVER_FEISHU=https://open.feishu.cn/open-apis/bot/v2/hook/
 FREELYAI_WHITELIST=model1,model2
 ROBOT_WHITELIST=gpt-3.5-turbo,gpt-4
 
+## 白名单配置说明
+
+### ROBOT_WHITELIST
+- **影响路由**: `/v1/*` (所有以 `/v1` 开头的路由)
+- **用途**: 控制机器人/OpenAI API 路由的模型访问权限
+- **示例**: `/v1/chat/completions`、`/v1/audio/speech` 等
+- **配置示例**: `ROBOT_WHITELIST=gpt-3.5-turbo,gpt-4,tts-1`
+
+### FREELYAI_WHITELIST  
+- **影响路由**: `/freelyai/*` (所有以 `/freelyai` 开头的路由)
+- **用途**: 控制 FreelyAI 路由的模型访问权限
+- **示例**: `/freelyai/v1/chat/completions` 等
+- **配置示例**: `FREELYAI_WHITELIST=model1,model2,tts-1`
+
+### 白名单格式
+- 支持逗号分隔的模型名称列表
+- 支持等号分割格式：`model=value` (只取等号左边部分)
+- 自动过滤空值和空格
+
 # 统计服务端口
 STATS_PORT=30491
 ```

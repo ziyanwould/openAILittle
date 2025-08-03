@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2025-03-15 19:58:30
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2025-03-15 20:36:36
+ * @LastEditTime: 2025-08-03 18:26:45
  * @FilePath: /openAILittle/middleware/modifyRequestBodyMiddleware.js
  * @Description: 封装修改 req.body 的中间件函数
  * 所以通道同一个名称在此处理
@@ -32,6 +32,17 @@ const modifyRequestBodyMiddleware = (req, res, next) => {
     }
     else if (req.body.model === "o1-mini") {
       delete req.body.top_p;
+    }
+    else if (req.body.model === "tts-1") {
+      req.body = {
+        "input": req.body.input,
+        "model": "fnlp/MOSS-TTSD-v0.5",
+        "stream": false,
+        "speed": 1,
+        "gain": 0,
+        "voice": "fishaudio/fish-speech-1.4:alex",
+        "response_format": "mp3"
+      }
     }
   }
   next();
