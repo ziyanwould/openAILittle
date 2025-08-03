@@ -2,8 +2,8 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2025-08-03 15:50:46
- * @FilePath: /openAILittle-1/index.js
+ * @LastEditTime: 2025-08-03 23:03:03
+ * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
  * @Copyright (c) 2024 by ${git_name_email}, All Rights Reserved. 
@@ -37,6 +37,9 @@ const loggingMiddleware = require('./middleware/loggingMiddleware'); // 引入�
 const chatnioRateLimiters = {}; // 用于存储 chatnio 的限流器
 // 在文件开头引入 dotenv
 require('dotenv').config();
+
+// 统一管理提示信息
+const UPGRADE_MESSAGE = process.env.UPGRADE_MESSAGE || '';
 
 // 解析 FREELYAI_WHITELIST 环境变量，支持等号分割取左边
 let freelyaiModelWhitelist = [];
@@ -92,7 +95,7 @@ let whitelistedIPs = [];
 loadWhitelistFromFile(whitelistFilePath);
 console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Next Whitelist loaded: ${whitelistedUserIds.toString()} user IDs, ${whitelistedIPs.toString()} IPs`);
 // 应用文本长度限制中间件到 "/" 和 "/google" 路由
-const defaultLengthLimiter = limitRequestBodyLength(15000, '请求文本过长，请缩短后再试。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度', whitelistedUserIds, whitelistedIPs);
+const defaultLengthLimiter = limitRequestBodyLength(15000, `请求文本过长，请缩短后再试。${UPGRADE_MESSAGE}`, whitelistedUserIds, whitelistedIPs);
 
 // 通知类迁移到 notices
 async function notices(data, requestBody, ntfyTopic = 'robot') {
@@ -241,9 +244,9 @@ for (const modelName in modelRateLimits) {
           max
         }, formattedRequestBody);
 
-        console.log(`请求过于频繁，请在 ${formattedDuration} 后再试。${modelName} 模型在 ${windowMs / 1000} 秒内的最大请求次数为 ${max} 次。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度`)
+        console.log(`请求过于频繁，请在 ${formattedDuration} 后再试。${modelName} 模型在 ${windowMs / 1000} 秒内的最大请求次数为 ${max} 次。${UPGRADE_MESSAGE}`)
         return res.status(429).json({
-          error: `4294 请求频繁，稍后重试。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度`,
+          error: `4294 请求频繁，稍后重试。${UPGRADE_MESSAGE}`,
         });
       },
     });
@@ -284,7 +287,7 @@ for (const modelName in modelRateLimits) {
       }, formattedRequestBody);
       console.log(`4295 今天${modelName} 模型总的请求次数已达上限`)
       return res.status(400).json({
-        error: `4295 请求频繁，稍后再试。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度`
+        error: `4295 请求频繁，稍后再试。${UPGRADE_MESSAGE}`
       });
     }
 
@@ -387,7 +390,7 @@ const googleProxy = createProxyMiddleware({
                       if (existingRequest.count > 1) {
                           console.log(`google路由：${moment().format("YYYY-MM-DD HH:mm:ss")} 15秒内相同内容请求超过4次.`);
                           return res.status(400).json({
-                              error: "4291 请求频繁，稍后再试。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度",
+                              error: `4291 请求频繁，稍后再试。${UPGRADE_MESSAGE}`,
                           });
                       }
                   } else {
@@ -570,7 +573,7 @@ const googleRateLimiter = rateLimit({
 
     console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 4291 Gemini request from ${req.ip} has been rate limited.`);
     res.status(429).json({
-      error: '4291 请求频繁，稍后再试。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度',
+      error: `4291 请求频繁，稍后再试。${UPGRADE_MESSAGE}`,
     });
   },
 });
@@ -981,7 +984,7 @@ app.use('/', (req, res, next) => {
             )} User ${userId} 4292 同一用户短时间内发送不同模型请求`
           );
           return res.status(429).json({
-            error: '4292 请求频繁，稍后再试。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度',
+            error: `4292 请求频繁，稍后再试。${UPGRADE_MESSAGE}`,
           });
         }
       } else {
@@ -1045,7 +1048,7 @@ app.use('/', (req, res, next) => {
                        if (existingRequest.count > 3) {
                           console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 15秒内相同内容请求超过3次. 触发拦截！`);
                            return res.status(400).json({
-                                error: '4293 请求频繁，稍后再试。或者使用 https://chatnio.liujiarong.top 平台解锁更多额度',
+                                error: `4293 请求频繁，稍后再试。${UPGRADE_MESSAGE}`,
                           });
                        }
                    }

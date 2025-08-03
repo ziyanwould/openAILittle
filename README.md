@@ -182,8 +182,16 @@ ROBOT_WHITELIST=gpt-3.5-turbo,gpt-4
 - 支持等号分割格式：`model=value` (只取等号左边部分)
 - 自动过滤空值和空格
 
+### 升级提示信息配置
+- **UPGRADE_MESSAGE**: 统一管理所有限流和错误提示中的升级链接
+- 默认值：`或者使用 https://chatnio.demo.top 平台解锁更多额度`
+- 可通过环境变量自定义提示信息
+
 # 统计服务端口
 STATS_PORT=30491
+
+# 升级提示信息
+UPGRADE_MESSAGE=或者使用 https://chatnio.demo.top 平台解锁更多额度
 ```
 
 ### 数据库配置
