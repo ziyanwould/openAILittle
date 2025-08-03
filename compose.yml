@@ -1,0 +1,28 @@
+version: "3.8"
+services:
+  app:
+    build: .
+    container_name: openai-little-app
+    restart: always
+    env_file:
+      - ./.env
+    ports:
+      - "20492:20491"
+      - "30492:30491"
+    depends_on:
+      - mysql
+  mysql:
+    image: mysql:8.2
+    container_name: nodeopenai-mysql2
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: apppass
+      MYSQL_DATABASE: usage_stats
+      MYSQL_USER: appuser
+      MYSQL_PASSWORD: apppass
+      TZ: Asia/Shanghai
+    ports:
+      - "${DB_PORT}:3306"
+    volumes:
+      - ./dbdata:/var/lib/mysql
+networks: {}

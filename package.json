@@ -4,6 +4,9 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "start": "npm-run-all -p start:main start:stats",
+    "start:main": "node index.js",
+    "start:stats": "node statsServer.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

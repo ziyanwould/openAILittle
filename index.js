@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2025-04-14 23:02:35
+ * @LastEditTime: 2025-08-03 15:50:46
  * @FilePath: /openAILittle-1/index.js
  * @Description: 
  * @
@@ -1241,7 +1241,7 @@ function loadWhitelistFromFile(filePath) {
 }
 
 // 监听端口
-const PORT = 20491;
+const PORT = process.env.MAIN_PORT || 20491;
 app.listen(PORT, () => {
   console.log(`代理服务器运行在 http://localhost:${PORT}`);
 });
