@@ -33,6 +33,7 @@ const modelRateLimits = require('./modules/modelRateLimits'); // 定义不同模
 const auxiliaryModels = require('./modules/auxiliaryModels'); // 定义辅助模型列表
 const limitRequestBodyLength = require('./middleware/limitRequestBodyLength'); // 引入文本长度限制中间件
 const loggingMiddleware = require('./middleware/loggingMiddleware'); // 引入日志中间件
+const contentModerationMiddleware = require('./middleware/contentModerationMiddleware'); // 引入内容审查中间件
 
 const chatnioRateLimiters = {}; // 用于存储 chatnio 的限流器
 // 在文件开头引入 dotenv
@@ -784,6 +785,9 @@ buildChatnioRateLimiters(); // 构建 chatnioRateLimiters 对象
 app.use(restrictGeminiModelAccess); // 应用 restrictGeminiModelAccess 中间件
 
 app.use(loggingMiddleware);  // <-- 中间件已优化为异步无阻塞
+
+// 应用内容审查中间件
+app.use(contentModerationMiddleware);
 
 // 应用 /free/gemini 代理中间件
 app.use('/freegemini', freeGeminiProxy);
