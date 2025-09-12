@@ -46,8 +46,10 @@ module.exports = {
       description: 'ChatNio 平台路由',
       models: {
         'gpt-4': { enabled: true },
-        'claude-3': { enabled: true },
-        'deepseek-ai/DeepSeek-V3.1': { enabled: true },
+        'gpt-4o-mini': { enabled: true },
+        'gpt-4.1-nano': { enabled: true },
+        'gpt-5-nano': { enabled: true },
+        'deepseek-ai/DeepSeek-V3.1': { enabled: false },
         'default': { enabled: false }
       }
     },
@@ -66,6 +68,8 @@ module.exports = {
       models: {
         'gpt-3.5-turbo': { enabled: true },
         'gpt-4o-mini': { enabled: true },
+        'gpt-4.1-nano': { enabled: true },
+        'gpt-5-nano': { enabled: true },
         'default': { enabled: false }
       }
     },
