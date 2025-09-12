@@ -45,7 +45,7 @@ module.exports = {
       enabled: true,
       description: 'ChatNio 平台路由',
       models: {
-        'gpt-4': { enabled: true },
+        'dall-e-img': { enabled: true },
         'gpt-4o-mini': { enabled: true },
         'gpt-4.1-nano': { enabled: true },
         'gpt-5-nano': { enabled: true },
@@ -66,7 +66,7 @@ module.exports = {
       enabled: true,
       description: '免费 OpenAI 路由',
       models: {
-        'gpt-3.5-turbo': { enabled: true },
+        'dall-e-img': { enabled: true },
         'gpt-4o-mini': { enabled: true },
         'gpt-4.1-nano': { enabled: true },
         'gpt-5-nano': { enabled: true },
