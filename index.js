@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2025-08-03 23:03:03
+ * @LastEditTime: 2025-09-14 00:09:59
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -608,7 +608,7 @@ const freelyaiProxy = createProxyMiddleware({
     },
   },
 });
-app.use('/freelyai', freelyaiProxy);
+app.use('/freelyai', freelyaiProxy, contentModerationMiddleware);
 
 //  googleProxy 中间件添加限流
 const googleRateLimiter = rateLimit({
@@ -842,16 +842,16 @@ app.use(loggingMiddleware);  // <-- 中间件已优化为异步无阻塞
 // 内容审核中间件已移至校验链末尾
 
 // 应用 /free/gemini 代理中间件
-app.use('/freegemini', freeGeminiProxy);
+app.use('/freegemini', freeGeminiProxy, contentModerationMiddleware);
 
 // 应用 googleRateLimiter 到 googleProxy
-app.use('/google', defaultLengthLimiter, googleRateLimiter, googleProxy);
+app.use('/google', defaultLengthLimiter, googleRateLimiter, googleProxy, contentModerationMiddleware);
 
 // 应用 modifyRequestBodyMiddleware 中间件
 app.use(modifyRequestBodyMiddleware);
 
 // 应用 /free/openai 代理中间件
-app.use('/freeopenai', freeOpenAIProxy);
+app.use('/freeopenai', freeOpenAIProxy, contentModerationMiddleware);
 
 // 中间件函数，用于检查敏感词和黑名单用户
 app.use('/', (req, res, next) => {
