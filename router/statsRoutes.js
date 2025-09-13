@@ -1,6 +1,14 @@
 // statsRoutes.js
 const router = require('express').Router();
-const { pool, manageUserIpBan } = require('../db');
+const { 
+  pool, 
+  manageUserIpBan,
+  getSystemConfigs,
+  addSystemConfig,
+  updateSystemConfig,
+  deleteSystemConfig,
+  resetSystemConfigsToDefaults
+} = require('../db');
 
 // 基础查询构建器 (添加分页参数)
 function buildFilterQuery(params, forCount = false) {
@@ -1013,6 +1021,155 @@ router.get('/config/stats', async (req, res) => {
     res.json({ data: stats });
   } catch (error) {
     console.error('获取配置统计失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+// ========== 系统配置管理 API ==========
+
+// 获取系统配置列表
+router.get('/stats/system-configs', async (req, res) => {
+  try {
+    const { configType, page = 1, pageSize = 20 } = req.query;
+    const filters = {};
+    
+    if (configType && configType.trim() !== '') {
+      filters.configType = configType;
+    }
+    
+    const configs = await getSystemConfigs(filters, parseInt(page), parseInt(pageSize));
+    res.json({ 
+      data: configs.data,
+      total: configs.total,
+      page: parseInt(page),
+      pageSize: parseInt(pageSize)
+    });
+  } catch (error) {
+    console.error('获取系统配置失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+// 添加系统配置
+router.post('/stats/system-configs', async (req, res) => {
+  try {
+    const { configType, configKey, configValue, description, priority = 100 } = req.body;
+    
+    if (!configType || !configKey || !configValue) {
+      return res.status(400).json({ error: '配置类型、配置键和配置值不能为空' });
+    }
+    
+    const result = await addSystemConfig({
+      configType,
+      configKey,
+      configValue,
+      description,
+      priority,
+      createdBy: 'USER'
+    });
+    
+    if (result) {
+      res.json({ message: '系统配置添加成功', id: result });
+    } else {
+      res.status(500).json({ error: '系统配置添加失败' });
+    }
+  } catch (error) {
+    console.error('添加系统配置失败:', error);
+    if (error.code === 'ER_DUP_ENTRY') {
+      res.status(400).json({ error: '该配置键已存在' });
+    } else {
+      res.status(500).json({ error: '服务器内部错误' });
+    }
+  }
+});
+
+// 更新系统配置
+router.put('/stats/system-configs/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { configValue, description, isActive, priority } = req.body;
+    
+    const updateData = {};
+    if (configValue !== undefined) updateData.configValue = configValue;
+    if (description !== undefined) updateData.description = description;
+    if (isActive !== undefined) updateData.isActive = isActive;
+    if (priority !== undefined) updateData.priority = priority;
+    
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).json({ error: '没有提供要更新的字段' });
+    }
+    
+    const result = await updateSystemConfig(parseInt(id), updateData);
+    
+    if (result) {
+      res.json({ message: '系统配置更新成功' });
+    } else {
+      res.status(404).json({ error: '系统配置不存在' });
+    }
+  } catch (error) {
+    console.error('更新系统配置失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+// 删除系统配置
+router.delete('/stats/system-configs/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await deleteSystemConfig(parseInt(id));
+    
+    if (result) {
+      res.json({ message: '系统配置删除成功' });
+    } else {
+      res.status(404).json({ error: '系统配置不存在' });
+    }
+  } catch (error) {
+    console.error('删除系统配置失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+// 重置系统配置到默认值
+router.post('/stats/system-configs/reset/:configType', async (req, res) => {
+  try {
+    const { configType } = req.params;
+    
+    const validTypes = ['MODERATION', 'RATE_LIMIT', 'AUXILIARY_MODEL', 'CHATNIO_LIMIT'];
+    if (!validTypes.includes(configType)) {
+      return res.status(400).json({ error: '无效的配置类型' });
+    }
+    
+    const result = await resetSystemConfigsToDefaults(configType);
+    
+    if (result) {
+      res.json({ message: `${configType} 配置已重置为默认值` });
+    } else {
+      res.status(500).json({ error: '重置系统配置失败' });
+    }
+  } catch (error) {
+    console.error('重置系统配置失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+// 获取系统配置统计信息
+router.get('/stats/system-configs/statistics', async (req, res) => {
+  try {
+    const [stats] = await pool.query(`
+      SELECT 
+        config_type,
+        COUNT(*) as total_count,
+        SUM(CASE WHEN is_default = 1 THEN 1 ELSE 0 END) as default_count,
+        SUM(CASE WHEN is_default = 0 THEN 1 ELSE 0 END) as custom_count,
+        SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) as active_count
+      FROM system_configs 
+      GROUP BY config_type
+      ORDER BY config_type
+    `);
+    
+    res.json({ data: stats });
+  } catch (error) {
+    console.error('获取系统配置统计失败:', error);
     res.status(500).json({ error: '服务器内部错误' });
   }
 });

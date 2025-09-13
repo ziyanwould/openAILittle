@@ -27,7 +27,7 @@ module.exports = {
         'deepseek-v3': { enabled: true },
         'deepseek-r1': { enabled: true },
         'grok-3': { enabled: false },
-        'default': { enabled: false } // 默认不启用
+        'default': { enabled: false }
       }
     },
     

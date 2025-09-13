@@ -25,7 +25,7 @@ const {
   isTimestamp,
   loadRestrictedUsersConfigFromFile
  } = require('./utils');
-const modifyRequestBodyMiddleware  = require('./middleware/modifyRequestBodyMiddleware'); // 模型参数修正统一处理
+const modifyRequestBodyMiddleware  = require('./modules/modifyRequestBodyMiddleware'); // 模型参数修正统一处理
 const { sendNotification } = require('./notices/pushDeerNotifier'); // 引入 pushDeerNotifier.js 文件中的 sendNotification 函数
 const { sendLarkNotification } = require('./notices/larkNotifier'); // 引入 pushDeerNotifier.js 文件中的 sendNotification 函数
 const chatnioRateLimits = require('./modules/chatnioRateLimits'); // 引入 chatnio 限流配置
@@ -34,7 +34,8 @@ const auxiliaryModels = require('./modules/auxiliaryModels'); // 定义辅助模
 const limitRequestBodyLength = require('./middleware/limitRequestBodyLength'); // 引入文本长度限制中间件
 const loggingMiddleware = require('./middleware/loggingMiddleware'); // 引入日志中间件
 const contentModerationMiddleware = require('./middleware/contentModerationMiddleware'); // 引入内容审查中间件
-const configManager = require('./modules/configManager'); // 引入配置管理器
+const configManager = require('./middleware/configManager'); // 引入配置管理器
+const { initializeSystemConfigs } = require('./db'); // 引入系统配置初始化
 
 const chatnioRateLimiters = {}; // 用于存储 chatnio 的限流器
 // 在文件开头引入 dotenv
@@ -1007,7 +1008,7 @@ app.use('/chatnio', (req, res, next) => {
         console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [ChatNio] 对 ${modelName} 模型的请求没有匹配的限流规则。`);
       next(); // 没有适用的 chatnio 限流器
   }
-}, chatnioProxy);
+}, contentModerationMiddleware, chatnioProxy);
 
 // 限制请求体长度
 app.use('/', defaultLengthLimiter);
@@ -1309,6 +1310,10 @@ app.listen(PORT, async () => {
     await loadAllConfigFromManager();
     await loadWhitelistFromConfigManager();
     console.log('配置管理器初始化完成 - Config Manager模式');
+    
+    // 初始化系统配置（从文件加载到数据库）
+    await initializeSystemConfigs();
+    console.log('系统配置初始化完成 - System Config模式');
   } catch (error) {
     console.error('配置管理器初始化失败，使用文件模式:', error);
     // 回退到文件模式

@@ -14,6 +14,7 @@ const { logModerationResult, checkUserIpBanStatus, updateViolationCount, findOrC
 
 class ContentModerationMiddleware {
   constructor() {
+    // 使用文件配置（运行时通过文件热更新）
     this.config = moderationConfig;
     this.cache = new Map(); // 缓存审查结果
     this.cacheExpiry = 30 * 60 * 1000; // 缓存30分钟
@@ -29,14 +30,14 @@ class ContentModerationMiddleware {
       return contents;
     }
 
-    // 提取直接字段
+    // 提取直接字段（字符串）
     this.config.contentExtraction.fields.forEach(field => {
       if (body[field] && typeof body[field] === 'string') {
         contents.push(body[field]);
       }
     });
 
-    // 提取嵌套字段
+    // 提取嵌套字段（如 messages 数组中的 content 文本）
     Object.entries(this.config.contentExtraction.nestedFields).forEach(([parentField, childField]) => {
       if (body[parentField] && Array.isArray(body[parentField])) {
         body[parentField].forEach(item => {
@@ -47,7 +48,6 @@ class ContentModerationMiddleware {
       }
     });
 
-    // 合并所有内容并限制长度
     const combinedContent = contents.join('\n').slice(0, this.config.contentExtraction.maxLength);
     return combinedContent.trim();
   }
@@ -166,11 +166,28 @@ class ContentModerationMiddleware {
   }
 
   /**
-   * 获取路由前缀
+   * 获取路由前缀（用于从字符串路径提取）
    */
   getRoutePrefix(path) {
+    if (!path || typeof path !== 'string') return '';
     const prefixes = Object.keys(this.config.routes);
     return prefixes.find(prefix => path.startsWith(prefix)) || '';
+  }
+
+  /**
+   * 获取原始路由前缀（优先使用 baseUrl，其次 originalUrl，最后 path）
+   * 目的：在被挂载的子路由（如 /chatnio、/freeopenai）下，不被 Express 截断成 /v1
+   */
+  getOriginalRoutePrefixFromReq(req) {
+    // 优先使用 baseUrl（挂载点），它能保留原始一级路由
+    if (req.baseUrl && this.config.routes[req.baseUrl]) {
+      return req.baseUrl;
+    }
+    // 其次尝试 originalUrl（未被修改的完整路径）
+    const fromOriginal = this.getRoutePrefix(req.originalUrl || '');
+    if (fromOriginal) return fromOriginal;
+    // 最后回退到当前 path
+    return this.getRoutePrefix(req.path || '');
   }
 
   /**
@@ -189,12 +206,14 @@ class ContentModerationMiddleware {
       let userId, clientIP, contentHash, moderationResult;
       
       try {
-        const routePrefix = this.getRoutePrefix(req.path);
+        // 计算用于配置匹配与日志展示的两个前缀（此处二者一致：原始前缀）
+        const routePrefixOriginal = this.getOriginalRoutePrefixFromReq(req);
+        const routePrefix = routePrefixOriginal; // 用于配置匹配
         const model = this.extractModelName(req.body);
         userId = this.extractUserId(req);
         clientIP = this.getClientIP(req);
 
-        console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] Request path: ${req.path}, Route prefix: ${routePrefix}, Model: ${model}, User: ${userId}, IP: ${clientIP}`);
+        console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] Request path: ${req.path}, baseUrl: ${req.baseUrl || ''}, originalUrl: ${req.originalUrl || ''}, Route(prefix for config/log): ${routePrefix}, Model: ${model}, User: ${userId}, IP: ${clientIP}`);
 
         // 1. 检查用户/IP是否被禁用
         const banStatus = await checkUserIpBanStatus(userId, clientIP);
@@ -252,7 +271,7 @@ class ContentModerationMiddleware {
           
           // 即使使用缓存结果，也要记录到数据库
           moderationResult = cached.result;
-          await this.recordModerationResult(userId, clientIP, content, contentHash, moderationResult, routePrefix, model);
+          await this.recordModerationResult(userId, clientIP, content, contentHash, moderationResult, routePrefix, model, req);
           
           if (!cached.result.safe) {
             console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] Content moderation failed (cached): ${cached.result.reason}`);
@@ -281,7 +300,7 @@ class ContentModerationMiddleware {
         });
 
         // 7. 记录审核结果到数据库并更新违规计数
-        await this.recordModerationResult(userId, clientIP, content, contentHash, moderationResult, routePrefix, model);
+        await this.recordModerationResult(userId, clientIP, content, contentHash, moderationResult, routePrefix, model, req);
 
         // 清理过期缓存
         if (this.cache.size > 1000) {
@@ -311,7 +330,7 @@ class ContentModerationMiddleware {
         if (userId && clientIP && moderationResult) {
           try {
             await this.recordModerationResult(userId, clientIP, 'ERROR_CONTENT', contentHash || 'ERROR_HASH', 
-              { safe: true, reason: 'ERROR', details: { error: error.message } }, 'ERROR_ROUTE', 'ERROR_MODEL');
+              { safe: true, reason: 'ERROR', details: { error: error.message } }, 'ERROR_ROUTE', 'ERROR_MODEL', req);
           } catch (dbError) {
             console.error('Failed to record error to database:', dbError);
           }
@@ -326,7 +345,7 @@ class ContentModerationMiddleware {
   /**
    * 记录审核结果到数据库
    */
-  async recordModerationResult(userId, clientIP, content, contentHash, moderationResult, routePrefix, model) {
+  async recordModerationResult(userId, clientIP, content, contentHash, moderationResult, routePrefix, model, req) {
     try {
       // 确保用户存在（如果有用户ID）
       if (userId) {
@@ -348,13 +367,24 @@ class ContentModerationMiddleware {
       }
       
       // 记录审核日志
+      // 补充一些元信息进 riskDetails，保留原 API 详情结构
+      const riskDetails = moderationResult.details || {};
+      try {
+        riskDetails.meta = {
+          baseUrl: req && req.baseUrl ? req.baseUrl : '',
+          originalUrl: req && req.originalUrl ? req.originalUrl : '',
+          path: req && req.path ? req.path : ''
+        };
+      } catch (_) {}
+
       const logId = await logModerationResult({
         userId: userId,
         ip: clientIP,
         content: content.substring(0, 1000), // 限制长度
         contentHash: contentHash,
         riskLevel: riskLevel,
-        riskDetails: moderationResult.details || {},
+        riskDetails: riskDetails,
+        // 在数据库中 route 字段写入原始路由前缀（如 /chatnio），而非重写后的 /v1
         route: routePrefix,
         model: model,
         apiResponse: JSON.stringify(moderationResult)
@@ -391,7 +421,7 @@ class ContentModerationMiddleware {
       this.config = require('../modules/moderationConfig');
       console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Content moderation config reloaded`);
     } catch (error) {
-      console.error(`${moment().format('YYYY-MM-DD HH:mm:ss')} Failed to reload moderation config:`, error);
+      console.error(`${moment().format('YYYY-MM-DD HH:mm:ss')} Failed to reload moderation config:`, error.message);
     }
   }
 }

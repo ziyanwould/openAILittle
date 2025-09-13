@@ -188,6 +188,29 @@ async function initializeDatabase() {
     `);
     console.log('✓ config_rules 表初始化完成');
 
+    // 系统配置管理表 (用于管理系统级配置如限流、内容审核、辅助模型等)
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS system_configs (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        config_type ENUM('MODERATION', 'RATE_LIMIT', 'AUXILIARY_MODEL', 'CHATNIO_LIMIT') NOT NULL,
+        config_key VARCHAR(255) NOT NULL COMMENT '配置键名，如模型名、路由名等',
+        config_value JSON NOT NULL COMMENT '配置值，JSON格式存储',
+        description TEXT COMMENT '配置描述',
+        is_active BOOLEAN DEFAULT TRUE COMMENT '是否启用',
+        is_default BOOLEAN DEFAULT FALSE COMMENT '是否为默认配置（重置时使用）',
+        priority INT DEFAULT 100 COMMENT '优先级，数字越小优先级越高',
+        created_by VARCHAR(100) DEFAULT 'SYSTEM' COMMENT '创建者',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_system_config_type (config_type),
+        INDEX idx_system_config_key (config_key),
+        INDEX idx_system_config_active (is_active),
+        INDEX idx_system_config_default (is_default),
+        UNIQUE KEY unique_system_config (config_type, config_key)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+    console.log('✓ system_configs 表初始化完成');
+
     // ==================== 创建索引 ====================
     console.log('[4/5] 创建索引');
     const indexConfig = [
@@ -709,6 +732,252 @@ async function syncFileConfigToDatabase() {
   }
 }
 
+/**
+ * 系统配置管理函数
+ */
+
+// 获取系统配置
+async function getSystemConfigs(filters = {}, page = 1, pageSize = 20) {
+  try {
+    let whereConditions = ['1=1'];
+    let params = [];
+    
+    // 配置类型筛选
+    if (filters.configType && filters.configType.trim() !== '') {
+      whereConditions.push('config_type = ?');
+      params.push(filters.configType);
+    }
+    
+    const whereClause = whereConditions.join(' AND ');
+    
+    // 查询总数
+    const countQuery = `SELECT COUNT(*) as total FROM system_configs WHERE ${whereClause}`;
+    const [[{ total }]] = await pool.query(countQuery, params);
+    
+    // 查询数据
+    const offset = (page - 1) * pageSize;
+    const dataQuery = `
+      SELECT * FROM system_configs 
+      WHERE ${whereClause}
+      ORDER BY config_type ASC, priority ASC, created_at ASC
+      LIMIT ? OFFSET ?
+    `;
+    const [rows] = await pool.query(dataQuery, [...params, pageSize, offset]);
+    
+    return {
+      data: rows,
+      total: total,
+      page: parseInt(page),
+      pageSize: parseInt(pageSize)
+    };
+  } catch (err) {
+    console.error('获取系统配置失败:', err.message);
+    return {
+      data: [],
+      total: 0,
+      page: parseInt(page),
+      pageSize: parseInt(pageSize)
+    };
+  }
+}
+
+// 添加系统配置
+async function addSystemConfig(params) {
+  const { configType, configKey, configValue, description, createdBy = 'ADMIN', priority = 100, isDefault = false } = params;
+  
+  try {
+    const [result] = await pool.query(`
+      INSERT INTO system_configs (config_type, config_key, config_value, description, priority, created_by, is_default)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `, [configType, configKey, JSON.stringify(configValue), description, priority, createdBy, isDefault]);
+    
+    return result;
+  } catch (err) {
+    console.error('添加系统配置失败:', err.message);
+    throw err;
+  }
+}
+
+// 更新系统配置
+async function updateSystemConfig(id, params) {
+  const { configValue, description, isActive, priority } = params;
+  
+  try {
+    const [result] = await pool.query(`
+      UPDATE system_configs 
+      SET config_value = ?, description = ?, is_active = ?, priority = ?, updated_at = NOW()
+      WHERE id = ?
+    `, [JSON.stringify(configValue), description, isActive, priority, id]);
+    
+    return result.affectedRows > 0;
+  } catch (err) {
+    console.error('更新系统配置失败:', err.message);
+    return false;
+  }
+}
+
+// 删除系统配置
+async function deleteSystemConfig(id) {
+  try {
+    const [result] = await pool.query(`
+      DELETE FROM system_configs WHERE id = ?
+    `, [id]);
+    
+    return result.affectedRows > 0;
+  } catch (err) {
+    console.error('删除系统配置失败:', err.message);
+    return false;
+  }
+}
+
+// 重置系统配置到默认值
+async function resetSystemConfigsToDefaults(configType) {
+  try {
+    // 先删除所有非默认配置
+    await pool.query(`
+      DELETE FROM system_configs 
+      WHERE config_type = ? AND is_default = FALSE
+    `, [configType]);
+    
+    // 激活所有默认配置
+    await pool.query(`
+      UPDATE system_configs 
+      SET is_active = TRUE, updated_at = NOW()
+      WHERE config_type = ? AND is_default = TRUE
+    `, [configType]);
+    
+    return true;
+  } catch (err) {
+    console.error('重置系统配置失败:', err.message);
+    return false;
+  }
+}
+
+// 初始化系统配置（从文件加载）
+async function initializeSystemConfigs() {
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    
+    // 检查是否已经初始化过
+    const [existing] = await pool.query('SELECT COUNT(*) as count FROM system_configs WHERE is_default = TRUE');
+    if (existing[0].count > 0) {
+      console.log('系统配置已初始化，跳过文件加载');
+      return;
+    }
+    
+    // 加载 auxiliaryModels.js
+    try {
+      const auxiliaryModels = require('../modules/auxiliaryModels');
+      for (const model of auxiliaryModels) {
+        await addSystemConfig({
+          configType: 'AUXILIARY_MODEL',
+          configKey: model,
+          configValue: { enabled: true },
+          description: `辅助模型: ${model}`,
+          createdBy: 'SYSTEM_INIT',
+          priority: 100,
+          isDefault: true
+        });
+      }
+      console.log(`✓ 已初始化 ${auxiliaryModels.length} 个辅助模型配置`);
+    } catch (err) {
+      console.error('加载辅助模型配置失败:', err.message);
+    }
+    
+    // 加载 moderationConfig.js
+    try {
+      const moderationConfig = require('../modules/moderationConfig');
+      
+      // 全局配置
+      await addSystemConfig({
+        configType: 'MODERATION',
+        configKey: 'global',
+        configValue: moderationConfig.global,
+        description: '内容审核全局配置',
+        createdBy: 'SYSTEM_INIT',
+        priority: 1,
+        isDefault: true
+      });
+      
+      // 路由配置
+      for (const [route, config] of Object.entries(moderationConfig.routes)) {
+        await addSystemConfig({
+          configType: 'MODERATION',
+          configKey: route,
+          configValue: config,
+          description: `内容审核路由配置: ${route}`,
+          createdBy: 'SYSTEM_INIT',
+          priority: 10,
+          isDefault: true
+        });
+      }
+      
+      console.log(`✓ 已初始化内容审核配置`);
+    } catch (err) {
+      console.error('加载内容审核配置失败:', err.message);
+    }
+    
+    // 加载 chatnioRateLimits.js
+    try {
+      const chatnioRateLimits = require('../modules/chatnioRateLimits');
+      
+      // 公共限制配置
+      await addSystemConfig({
+        configType: 'CHATNIO_LIMIT',
+        configKey: 'commonLimits',
+        configValue: chatnioRateLimits.commonLimits,
+        description: 'ChatNio 公共限制配置',
+        createdBy: 'SYSTEM_INIT',
+        priority: 10,
+        isDefault: true
+      });
+      
+      // 自定义用户限制配置
+      for (const [userIdOrIp, config] of Object.entries(chatnioRateLimits.customLimits)) {
+        await addSystemConfig({
+          configType: 'CHATNIO_LIMIT',
+          configKey: `custom_${userIdOrIp}`,
+          configValue: config,
+          description: `ChatNio 自定义限制: ${userIdOrIp}`,
+          createdBy: 'SYSTEM_INIT',
+          priority: 20,
+          isDefault: true
+        });
+      }
+      
+      console.log(`✓ 已初始化 ChatNio 限制配置`);
+    } catch (err) {
+      console.error('加载 ChatNio 限制配置失败:', err.message);
+    }
+    
+    // 加载 modelRateLimits.js
+    try {
+      const modelRateLimits = require('../modules/modelRateLimits');
+      
+      for (const [modelName, config] of Object.entries(modelRateLimits)) {
+        await addSystemConfig({
+          configType: 'RATE_LIMIT',
+          configKey: modelName,
+          configValue: config,
+          description: `模型限制配置: ${modelName}`,
+          createdBy: 'SYSTEM_INIT',
+          priority: 10,
+          isDefault: true
+        });
+      }
+      
+      console.log(`✓ 已初始化模型限制配置`);
+    } catch (err) {
+      console.error('加载模型限制配置失败:', err.message);
+    }
+    
+    console.log('系统配置初始化完成');
+  } catch (err) {
+    console.error('初始化系统配置失败:', err.message);
+  }
+}
+
 // 导出功能模块
 module.exports = {
   pool,
@@ -723,5 +992,12 @@ module.exports = {
   addConfigRule,
   updateConfigRule,
   deleteConfigRule,
-  syncFileConfigToDatabase
+  syncFileConfigToDatabase,
+  // 系统配置管理功能
+  getSystemConfigs,
+  addSystemConfig,
+  updateSystemConfig,
+  deleteSystemConfig,
+  resetSystemConfigsToDefaults,
+  initializeSystemConfigs
 };
