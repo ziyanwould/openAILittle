@@ -9,6 +9,8 @@
 
 const moderationConfig = require('../modules/moderationConfig');
 const moment = require('moment');
+const crypto = require('crypto');
+const { logModerationResult, checkUserIpBanStatus, updateViolationCount, findOrCreateUser } = require('../db/index');
 
 class ContentModerationMiddleware {
   constructor() {
@@ -54,8 +56,21 @@ class ContentModerationMiddleware {
    * 生成内容哈希用于缓存
    */
   generateContentHash(content) {
-    const crypto = require('crypto');
     return crypto.createHash('md5').update(content).digest('hex');
+  }
+
+  /**
+   * 从请求中提取用户ID（与主服务保持一致的方法）
+   */
+  extractUserId(req) {
+    return req.body.user || req.headers['x-user-id'] || null;
+  }
+
+  /**
+   * 获取客户端IP地址（与主服务保持一致的方法）
+   */
+  getClientIP(req) {
+    return req.body.user_ip || req.headers['x-user-ip'] || req.ip || 'unknown';
   }
 
   /**
@@ -171,13 +186,34 @@ class ContentModerationMiddleware {
    */
   middleware() {
     return async (req, res, next) => {
+      let userId, clientIP, contentHash, moderationResult;
+      
       try {
         const routePrefix = this.getRoutePrefix(req.path);
         const model = this.extractModelName(req.body);
+        userId = this.extractUserId(req);
+        clientIP = this.getClientIP(req);
 
-        console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] Request path: ${req.path}, Route prefix: ${routePrefix}, Model: ${model}`);
+        console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] Request path: ${req.path}, Route prefix: ${routePrefix}, Model: ${model}, User: ${userId}, IP: ${clientIP}`);
 
-        // 检查是否需要审查
+        // 1. 检查用户/IP是否被禁用
+        const banStatus = await checkUserIpBanStatus(userId, clientIP);
+        if (banStatus.isBanned) {
+          const banMessage = banStatus.isPermanent ? 
+            '您的账户/IP已被永久禁用' : 
+            `您的账户/IP已被禁用至 ${moment(banStatus.banUntil).format('YYYY-MM-DD HH:mm:ss')}`;
+          
+          console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] ❌ User/IP banned: ${userId || 'N/A'}/${clientIP}`);
+          return res.status(403).json({
+            error: {
+              code: 4036,
+              message: banMessage,
+              details: '内容审核：用户/IP被禁用'
+            }
+          });
+        }
+
+        // 2. 检查是否需要审查
         const shouldModerateResult = this.shouldModerate(routePrefix, model);
         console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] Should moderate: ${shouldModerateResult}, Global enabled: ${this.config.global.enabled}`);
         
@@ -195,7 +231,7 @@ class ContentModerationMiddleware {
           return next();
         }
 
-        // 提取内容
+        // 3. 提取内容
         const content = this.extractContentFromBody(req.body);
         console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] Extracted content length: ${content.length}`);
         
@@ -206,13 +242,18 @@ class ContentModerationMiddleware {
 
         console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] Starting moderation check for route: ${routePrefix}, model: ${model}`);
 
-        // 检查缓存
-        const contentHash = this.generateContentHash(content);
+        // 4. 检查缓存
+        contentHash = this.generateContentHash(content);
         const cached = this.cache.get(contentHash);
         console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] Cache check - hash: ${contentHash}, cached: ${!!cached}`);
         
         if (cached && Date.now() - cached.timestamp < this.cacheExpiry) {
           console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] Using cached result: ${JSON.stringify(cached.result)}`);
+          
+          // 即使使用缓存结果，也要记录到数据库
+          moderationResult = cached.result;
+          await this.recordModerationResult(userId, clientIP, content, contentHash, moderationResult, routePrefix, model);
+          
           if (!cached.result.safe) {
             console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] Content moderation failed (cached): ${cached.result.reason}`);
             return res.status(400).json({
@@ -228,23 +269,26 @@ class ContentModerationMiddleware {
           return next();
         }
 
-        // 调用审查API
+        // 5. 调用审查API
         console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] Calling moderation API for content: "${content.substring(0, 100)}${content.length > 100 ? '...' : ''}"`);
-        const moderationResult = await this.callModerationAPI(content);
+        moderationResult = await this.callModerationAPI(content);
         console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] API result: ${JSON.stringify(moderationResult)}`);
         
-        // 缓存结果
+        // 6. 缓存结果
         this.cache.set(contentHash, {
           result: moderationResult,
           timestamp: Date.now()
         });
+
+        // 7. 记录审核结果到数据库并更新违规计数
+        await this.recordModerationResult(userId, clientIP, content, contentHash, moderationResult, routePrefix, model);
 
         // 清理过期缓存
         if (this.cache.size > 1000) {
           this.cleanExpiredCache();
         }
 
-        // 检查审查结果
+        // 8. 检查审查结果
         if (!moderationResult.safe) {
           console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] ❌ Content moderation FAILED: ${moderationResult.reason}`);
           return res.status(400).json({
@@ -262,10 +306,68 @@ class ContentModerationMiddleware {
 
       } catch (error) {
         console.error(`${moment().format('YYYY-MM-DD HH:mm:ss')} Content moderation middleware error:`, error);
+        
+        // 即使出错也尝试记录基本信息
+        if (userId && clientIP && moderationResult) {
+          try {
+            await this.recordModerationResult(userId, clientIP, 'ERROR_CONTENT', contentHash || 'ERROR_HASH', 
+              { safe: true, reason: 'ERROR', details: { error: error.message } }, 'ERROR_ROUTE', 'ERROR_MODEL');
+          } catch (dbError) {
+            console.error('Failed to record error to database:', dbError);
+          }
+        }
+        
         // 发生错误时继续执行，不阻塞请求
         next();
       }
     };
+  }
+
+  /**
+   * 记录审核结果到数据库
+   */
+  async recordModerationResult(userId, clientIP, content, contentHash, moderationResult, routePrefix, model) {
+    try {
+      // 确保用户存在（如果有用户ID）
+      if (userId) {
+        await findOrCreateUser(userId);
+      }
+      
+      // 确定风险等级
+      let riskLevel = 'PASS';
+      if (!moderationResult.safe) {
+        if (moderationResult.details && moderationResult.details.risk_level) {
+          riskLevel = moderationResult.details.risk_level;
+        } else if (moderationResult.reason.includes('REJECT')) {
+          riskLevel = 'REJECT';
+        } else if (moderationResult.reason.includes('REVIEW')) {
+          riskLevel = 'REVIEW';
+        } else {
+          riskLevel = 'REJECT'; // 默认为严重违规
+        }
+      }
+      
+      // 记录审核日志
+      const logId = await logModerationResult({
+        userId: userId,
+        ip: clientIP,
+        content: content.substring(0, 1000), // 限制长度
+        contentHash: contentHash,
+        riskLevel: riskLevel,
+        riskDetails: moderationResult.details || {},
+        route: routePrefix,
+        model: model,
+        apiResponse: JSON.stringify(moderationResult)
+      });
+      
+      // 更新违规计数
+      await updateViolationCount(userId, clientIP, riskLevel);
+      
+      console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] Recorded to database - Log ID: ${logId}, Risk: ${riskLevel}`);
+      
+    } catch (error) {
+      console.error(`${moment().format('YYYY-MM-DD HH:mm:ss')} Failed to record moderation result:`, error);
+    }
   }
 
   /**

@@ -113,6 +113,58 @@ async function initializeDatabase() {
     `);
     console.log('✓ conversation_logs 表初始化完成');
 
+    // 内容审核记录表 (新增)
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS moderation_logs (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id VARCHAR(36),
+        ip VARCHAR(45) NOT NULL,
+        content TEXT NOT NULL,
+        content_hash VARCHAR(64),
+        risk_level ENUM('PASS', 'REVIEW', 'REJECT') NOT NULL,
+        risk_details JSON,
+        route VARCHAR(50),
+        model VARCHAR(50),
+        api_response TEXT,
+        processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_moderation_user (user_id),
+        INDEX idx_moderation_ip (ip),
+        INDEX idx_moderation_risk (risk_level),
+        INDEX idx_moderation_time (processed_at),
+        INDEX idx_moderation_hash (content_hash),
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+    console.log('✓ moderation_logs 表初始化完成');
+
+    // 用户/IP标记管理表 (新增)
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS user_ip_flags (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id VARCHAR(36) NULL,
+        ip VARCHAR(45) NULL,
+        flag_type ENUM('USER', 'IP') NOT NULL,
+        violation_count INT DEFAULT 1,
+        first_violation_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_violation_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        is_banned BOOLEAN DEFAULT FALSE,
+        ban_until TIMESTAMP NULL,
+        ban_reason TEXT,
+        created_by VARCHAR(100) DEFAULT 'SYSTEM',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_flags_user (user_id),
+        INDEX idx_flags_ip (ip),
+        INDEX idx_flags_type (flag_type),
+        INDEX idx_flags_banned (is_banned),
+        INDEX idx_flags_ban_until (ban_until),
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        UNIQUE KEY unique_user_flag (user_id, flag_type),
+        UNIQUE KEY unique_ip_flag (ip, flag_type)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+    console.log('✓ user_ip_flags 表初始化完成');
+
     // ==================== 创建索引 ====================
     console.log('[4/5] 创建索引');
     const indexConfig = [
@@ -260,10 +312,188 @@ async function syncRestrictedModels(modelList) {
   }
 })();
 
+/**
+ * 记录内容审核结果
+ */
+async function logModerationResult(params) {
+  const { userId, ip, content, contentHash, riskLevel, riskDetails, route, model, apiResponse } = params;
+  
+  try {
+    const [result] = await pool.query(`
+      INSERT INTO moderation_logs 
+      (user_id, ip, content, content_hash, risk_level, risk_details, route, model, api_response)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [userId, ip, content, contentHash, riskLevel, JSON.stringify(riskDetails), route, model, apiResponse]);
+    
+    return result.insertId;
+  } catch (err) {
+    console.error('记录审核日志失败:', err.message);
+    return null;
+  }
+}
+
+/**
+ * 检查用户/IP是否被禁用
+ */
+async function checkUserIpBanStatus(userId, ip) {
+  try {
+    const [userResult] = await pool.query(`
+      SELECT is_banned, ban_until FROM user_ip_flags 
+      WHERE (user_id = ? OR ip = ?) AND is_banned = TRUE AND (ban_until IS NULL OR ban_until > NOW())
+    `, [userId, ip]);
+    
+    if (userResult.length > 0) {
+      const banInfo = userResult[0];
+      return {
+        isBanned: true,
+        banUntil: banInfo.ban_until,
+        isPermanent: !banInfo.ban_until
+      };
+    }
+    
+    return { isBanned: false };
+  } catch (err) {
+    console.error('检查禁用状态失败:', err.message);
+    return { isBanned: false };
+  }
+}
+
+/**
+ * 更新违规计数并自动标记
+ */
+async function updateViolationCount(userId, ip, riskLevel) {
+  if (riskLevel === 'PASS') return;
+  
+  let connection;
+  try {
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+    
+    // 处理用户违规
+    if (userId) {
+      await connection.query(`
+        INSERT INTO user_ip_flags (user_id, flag_type, violation_count, first_violation_at, last_violation_at)
+        VALUES (?, 'USER', 1, NOW(), NOW())
+        ON DUPLICATE KEY UPDATE 
+          violation_count = violation_count + 1,
+          last_violation_at = NOW()
+      `, [userId]);
+    }
+    
+    // 处理IP违规
+    await connection.query(`
+      INSERT INTO user_ip_flags (ip, flag_type, violation_count, first_violation_at, last_violation_at)
+      VALUES (?, 'IP', 1, NOW(), NOW())
+      ON DUPLICATE KEY UPDATE 
+        violation_count = violation_count + 1,
+        last_violation_at = NOW()
+    `, [ip]);
+    
+    // 检查是否需要自动禁用 (违规5次以上)
+    const autobanThreshold = 5;
+    const [violations] = await connection.query(`
+      SELECT id, user_id, ip, violation_count, flag_type 
+      FROM user_ip_flags 
+      WHERE ((user_id = ? AND flag_type = 'USER') OR (ip = ? AND flag_type = 'IP'))
+        AND violation_count >= ? 
+        AND is_banned = FALSE
+    `, [userId, ip, autobanThreshold]);
+    
+    for (const violation of violations) {
+      await connection.query(`
+        UPDATE user_ip_flags 
+        SET is_banned = TRUE, 
+            ban_until = DATE_ADD(NOW(), INTERVAL 24 HOUR),
+            ban_reason = CONCAT('自动禁用：违规次数达到 ', violation_count, ' 次'),
+            updated_at = NOW()
+        WHERE id = ?
+      `, [violation.id]);
+      
+      console.log(`[Auto Ban] ${violation.flag_type} ${violation.user_id || violation.ip} 因违规${violation.violation_count}次被自动禁用24小时`);
+    }
+    
+    await connection.commit();
+  } catch (err) {
+    if (connection) await connection.rollback();
+    console.error('更新违规计数失败:', err.message);
+  } finally {
+    if (connection) connection.release();
+  }
+}
+
+/**
+ * 管理用户/IP禁用状态
+ */
+async function manageUserIpBan(params) {
+  const { userId, ip, action, banDuration, banReason, operatorId } = params;
+  
+  try {
+    if (action === 'BAN') {
+      const banUntil = banDuration ? 
+        `DATE_ADD(NOW(), INTERVAL ${banDuration} HOUR)` : null;
+      
+      if (userId) {
+        await pool.query(`
+          INSERT INTO user_ip_flags (user_id, flag_type, is_banned, ban_until, ban_reason, created_by)
+          VALUES (?, 'USER', TRUE, ${banUntil || 'NULL'}, ?, ?)
+          ON DUPLICATE KEY UPDATE 
+            is_banned = TRUE,
+            ban_until = ${banUntil || 'NULL'},
+            ban_reason = VALUES(ban_reason),
+            created_by = VALUES(created_by),
+            updated_at = NOW()
+        `, [userId, banReason, operatorId]);
+      }
+      
+      if (ip) {
+        await pool.query(`
+          INSERT INTO user_ip_flags (ip, flag_type, is_banned, ban_until, ban_reason, created_by)
+          VALUES (?, 'IP', TRUE, ${banUntil || 'NULL'}, ?, ?)
+          ON DUPLICATE KEY UPDATE 
+            is_banned = TRUE,
+            ban_until = ${banUntil || 'NULL'},
+            ban_reason = VALUES(ban_reason),
+            created_by = VALUES(created_by),
+            updated_at = NOW()
+        `, [ip, banReason, operatorId]);
+      }
+    } else if (action === 'UNBAN') {
+      const conditions = [];
+      const values = [];
+      
+      if (userId) {
+        conditions.push('(user_id = ? AND flag_type = "USER")');
+        values.push(userId);
+      }
+      if (ip) {
+        conditions.push('(ip = ? AND flag_type = "IP")');
+        values.push(ip);
+      }
+      
+      if (conditions.length > 0) {
+        await pool.query(`
+          UPDATE user_ip_flags 
+          SET is_banned = FALSE, ban_until = NULL, updated_at = NOW()
+          WHERE ${conditions.join(' OR ')}
+        `, values);
+      }
+    }
+    
+    return true;
+  } catch (err) {
+    console.error('管理禁用状态失败:', err.message);
+    return false;
+  }
+}
+
 // 导出功能模块
 module.exports = {
   pool,
   formatToken,
   isRestrictedModel,
-  findOrCreateUser
+  findOrCreateUser,
+  logModerationResult,
+  checkUserIpBanStatus,
+  updateViolationCount,
+  manageUserIpBan
 };
