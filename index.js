@@ -34,6 +34,7 @@ const auxiliaryModels = require('./modules/auxiliaryModels'); // 定义辅助模
 const limitRequestBodyLength = require('./middleware/limitRequestBodyLength'); // 引入文本长度限制中间件
 const loggingMiddleware = require('./middleware/loggingMiddleware'); // 引入日志中间件
 const contentModerationMiddleware = require('./middleware/contentModerationMiddleware'); // 引入内容审查中间件
+const configManager = require('./modules/configManager'); // 引入配置管理器
 
 const chatnioRateLimiters = {}; // 用于存储 chatnio 的限流器
 // 在文件开头引入 dotenv
@@ -86,15 +87,25 @@ const userRequestHistory = new Map();
 // 用于存储最近请求内容的哈希值和时间戳
 const recentRequestContentHashes = new Map();
 
-// 定义白名单文件路径
-const whitelistFilePath = 'whitelist.json';
-// 初始化白名单 (用户ID和IP地址)
+// 定义白名单文件路径（保留兼容性）
+const whitelistFilePath = 'config/whitelist.json';
+// 初始化白名单 (用户ID和IP地址) - 现在从配置管理器获取
 let whitelistedUserIds = [];
 let whitelistedIPs = [];
 
-// 初次加载白名单
-loadWhitelistFromFile(whitelistFilePath);
-console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Next Whitelist loaded: ${whitelistedUserIds.toString()} user IDs, ${whitelistedIPs.toString()} IPs`);
+// 初次加载白名单 - 使用配置管理器
+async function loadWhitelistFromConfigManager() {
+  try {
+    const whitelist = await configManager.getWhitelistConfig();
+    whitelistedUserIds = whitelist.userIds;
+    whitelistedIPs = whitelist.ips;
+    console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Config Manager Whitelist loaded: ${whitelistedUserIds.length} user IDs, ${whitelistedIPs.length} IPs`);
+  } catch (error) {
+    console.error('加载白名单配置失败，使用文件备份:', error);
+    loadWhitelistFromFile(whitelistFilePath);
+  }
+}
+
 // 应用文本长度限制中间件到 "/" 和 "/google" 路由
 const defaultLengthLimiter = limitRequestBodyLength(15000, `请求文本过长，请缩短后再试。${UPGRADE_MESSAGE}`, whitelistedUserIds, whitelistedIPs);
 
@@ -123,43 +134,84 @@ async function notices(data, requestBody, ntfyTopic = 'robot') {
   sendLarkNotification(data, requestBody, webhookUrl);
 }
 
-// 定义敏感词和黑名单文件路径
-const sensitiveWordsFilePath = 'Sensitive.txt'; // 可以是 .txt 或 .json
-const blacklistedUserIdsFilePath = 'BlacklistedUsers.txt'; // 可以是 .txt 或 .json
-const blacklistedIPsFilePath = 'BlacklistedIPs.txt'; // 新增 IP 黑名单文件路径
+// 定义敏感词和黑名单文件路径（保留兼容性）
+const sensitiveWordsFilePath = 'config/Sensitive.txt'; // 可以是 .txt 或 .json
+const blacklistedUserIdsFilePath = 'config/BlacklistedUsers.txt'; // 可以是 .txt 或 .json
+const blacklistedIPsFilePath = 'config/BlacklistedIPs.txt'; // 新增 IP 黑名单文件路径
 
-// 初始化敏感词和黑名单
-let sensitiveWords = loadWordsFromFile(sensitiveWordsFilePath);
-let blacklistedUserIds = loadWordsFromFile(blacklistedUserIdsFilePath);
-let blacklistedIPs = loadWordsFromFile(blacklistedIPsFilePath); // 加载 IP 黑名单
+// 初始化敏感词和黑名单 - 现在从配置管理器获取
+let sensitiveWords = [];
+let blacklistedUserIds = [];
+let blacklistedIPs = [];
 
-// 定义配置文件路径
-const filterConfigFilePath = 'filterConfig.json';
+// 定义配置文件路径（保留兼容性）
+const filterConfigFilePath = 'config/filterConfig.json';
 
-// 初始化过滤配置
-let filterConfig = loadFilterConfigFromFile(filterConfigFilePath);
+// 初始化过滤配置 - 现在从配置管理器获取
+let filterConfig = {};
 
-// 定义受限用户配置文件路径
-const restrictedUsersConfigFilePath = 'restrictedUsers.json';
-// 加载受限用户配置
-let restrictedUsersConfig = loadRestrictedUsersConfigFromFile(restrictedUsersConfigFilePath);
-// 敏感形态的初始读取
-// 调用函数时，使用新的文件名
-let sensitivePatternsFile = 'sensitive_patterns.json';
-let sensitivePatterns = readSensitivePatternsFromFile(sensitivePatternsFile);
+// 定义受限用户配置文件路径（保留兼容性）
+const restrictedUsersConfigFilePath = 'config/restrictedUsers.json';
+// 加载受限用户配置 - 现在从配置管理器获取
+let restrictedUsersConfig = {};
+// 敏感形态的初始读取 - 现在从配置管理器获取
+let sensitivePatternsFile = 'config/sensitive_patterns.json';
+let sensitivePatterns = [];
 
-// 每 120 秒同步一次敏感词和黑名单
-setInterval(() => {
-  sensitiveWords = loadWordsFromFile(sensitiveWordsFilePath);
-  blacklistedUserIds = loadWordsFromFile(blacklistedUserIdsFilePath);
-  blacklistedIPs = loadWordsFromFile(blacklistedIPsFilePath); // 更新 IP 黑名单
-  restrictedUsersConfig = loadRestrictedUsersConfigFromFile(restrictedUsersConfigFilePath); // 更新受限用户配置
-  loadWhitelistFromFile(whitelistFilePath); // 更新白名单
-  console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Sensitive words and blacklisted user IDs updated.`);
-  filterConfig = loadFilterConfigFromFile(filterConfigFilePath);
-  console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Filter config updated.`);
-  sensitivePatterns = readSensitivePatternsFromFile(sensitivePatternsFile);
-  console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')}  Reloading sensitive patterns...`);
+// 从配置管理器加载所有配置
+async function loadAllConfigFromManager() {
+  try {
+    sensitiveWords = await configManager.getSensitiveWords();
+    blacklistedUserIds = await configManager.getBlacklistedUsers();
+    blacklistedIPs = await configManager.getBlacklistedIPs();
+    filterConfig = await configManager.getModelFilters();
+    restrictedUsersConfig = await configManager.getUserRestrictions();
+    sensitivePatterns = await configManager.getSensitivePatterns();
+    
+    console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Config Manager 配置加载完成:`, {
+      sensitiveWords: sensitiveWords.length,
+      blacklistedUsers: blacklistedUserIds.length,
+      blacklistedIPs: blacklistedIPs.length,
+      filterConfigs: Object.keys(filterConfig).length,
+      restrictedUsers: Object.keys(restrictedUsersConfig).length,
+      sensitivePatterns: sensitivePatterns.length
+    });
+  } catch (error) {
+    console.error('配置管理器加载失败，使用文件备份:', error);
+    // 如果配置管理器失败，回退到文件加载
+    sensitiveWords = loadWordsFromFile(sensitiveWordsFilePath);
+    blacklistedUserIds = loadWordsFromFile(blacklistedUserIdsFilePath);
+    blacklistedIPs = loadWordsFromFile(blacklistedIPsFilePath);
+    filterConfig = loadFilterConfigFromFile(filterConfigFilePath);
+    restrictedUsersConfig = loadRestrictedUsersConfigFromFile(restrictedUsersConfigFilePath);
+    sensitivePatterns = readSensitivePatternsFromFile(sensitivePatternsFile);
+  }
+}
+
+// 每 5 分钟同步一次配置 - 使用配置管理器
+setInterval(async () => {
+  try {
+    // 清除配置管理器缓存并重新加载
+    configManager.clearCache();
+    
+    // 重新加载所有配置
+    await loadAllConfigFromManager();
+    await loadWhitelistFromConfigManager();
+    
+    console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 配置同步完成 - Config Manager模式`);
+  } catch (error) {
+    console.error('配置同步失败，使用文件备份模式:', error);
+    // 回退到文件模式
+    sensitiveWords = loadWordsFromFile(sensitiveWordsFilePath);
+    blacklistedUserIds = loadWordsFromFile(blacklistedUserIdsFilePath);
+    blacklistedIPs = loadWordsFromFile(blacklistedIPsFilePath);
+    loadWhitelistFromFile(whitelistFilePath);
+    filterConfig = loadFilterConfigFromFile(filterConfigFilePath);
+    restrictedUsersConfig = loadRestrictedUsersConfigFromFile(restrictedUsersConfigFilePath);
+    sensitivePatterns = readSensitivePatternsFromFile(sensitivePatternsFile);
+    
+    console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} 配置同步完成 - 文件备份模式`);
+  }
 }, 5 * 60 * 1000);
 
 // 定期清理缓存
@@ -786,8 +838,7 @@ app.use(restrictGeminiModelAccess); // 应用 restrictGeminiModelAccess 中间�
 
 app.use(loggingMiddleware);  // <-- 中间件已优化为异步无阻塞
 
-// 应用内容审查中间件
-app.use(contentModerationMiddleware);
+// 内容审核中间件已移至校验链末尾
 
 // 应用 /free/gemini 代理中间件
 app.use('/freegemini', freeGeminiProxy);
@@ -1230,7 +1281,7 @@ app.use('/', (req, res, next) => {
       time: moment().format('YYYY-MM-DD HH:mm:ss'),
     }, formattedRequestBody);
   }
-}, openAIProxy);
+}, contentModerationMiddleware, openAIProxy);
 
 // 从文件中加载白名单
 function loadWhitelistFromFile(filePath) {
@@ -1249,6 +1300,25 @@ function loadWhitelistFromFile(filePath) {
 
 // 监听端口
 const PORT = process.env.MAIN_PORT || 20491;
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`代理服务器运行在 http://localhost:${PORT}`);
+  
+  // 初始化配置管理器
+  try {
+    await configManager.initialize();
+    await loadAllConfigFromManager();
+    await loadWhitelistFromConfigManager();
+    console.log('配置管理器初始化完成 - Config Manager模式');
+  } catch (error) {
+    console.error('配置管理器初始化失败，使用文件模式:', error);
+    // 回退到文件模式
+    sensitiveWords = loadWordsFromFile(sensitiveWordsFilePath);
+    blacklistedUserIds = loadWordsFromFile(blacklistedUserIdsFilePath);
+    blacklistedIPs = loadWordsFromFile(blacklistedIPsFilePath);
+    loadWhitelistFromFile(whitelistFilePath);
+    filterConfig = loadFilterConfigFromFile(filterConfigFilePath);
+    restrictedUsersConfig = loadRestrictedUsersConfigFromFile(restrictedUsersConfigFilePath);
+    sensitivePatterns = readSensitivePatternsFromFile(sensitivePatternsFile);
+    console.log('配置初始化完成 - 文件备份模式');
+  }
 });

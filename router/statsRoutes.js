@@ -658,13 +658,13 @@ router.get('/stats/hourly-violations', async (req, res) => {
     const query = `
       SELECT 
         HOUR(processed_at) as hour,
-        DAYOFWEEK(processed_at) - 1 as day_of_week,
+        (DAYOFWEEK(processed_at) - 1) as day_of_week,
         COUNT(*) as total_count,
         SUM(CASE WHEN risk_level != 'PASS' THEN 1 ELSE 0 END) as violation_count,
         ROUND(SUM(CASE WHEN risk_level != 'PASS' THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) as violation_rate
       FROM moderation_logs 
       WHERE processed_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
-      GROUP BY HOUR(processed_at), DAYOFWEEK(processed_at)
+      GROUP BY HOUR(processed_at), (DAYOFWEEK(processed_at) - 1)
       ORDER BY day_of_week, hour
     `;
     
@@ -733,6 +733,286 @@ router.get('/stats/model-violations', async (req, res) => {
     });
   } catch (error) {
     console.error('获取模型违规统计失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+// ==================== 配置管理API接口 ====================
+
+// 引入配置管理相关的数据库函数
+const { 
+  getAllConfigRules, 
+  addConfigRule, 
+  updateConfigRule, 
+  deleteConfigRule, 
+  syncFileConfigToDatabase 
+} = require('../db/index');
+
+// 获取所有配置规则
+router.get('/config/rules', async (req, res) => {
+  const { rule_type, is_from_file, is_active, page = 1, pageSize = 50 } = req.query;
+  const offset = (page - 1) * pageSize;
+  
+  try {
+    // 构建查询条件
+    let whereConditions = [];
+    let queryParams = [];
+    
+    if (rule_type && rule_type.trim() !== '') {
+      whereConditions.push('rule_type = ?');
+      queryParams.push(rule_type);
+    }
+    
+    if (is_from_file !== undefined && is_from_file.trim() !== '') {
+      whereConditions.push('is_from_file = ?');
+      queryParams.push(is_from_file === 'true' ? 1 : 0);
+    }
+    
+    if (is_active !== undefined && is_active.trim() !== '') {
+      whereConditions.push('is_active = ?');
+      queryParams.push(is_active === 'true' ? 1 : 0);
+    }
+    
+    // 查询总数
+    let countQuery = 'SELECT COUNT(*) as total FROM config_rules';
+    if (whereConditions.length > 0) {
+      countQuery += ' WHERE ' + whereConditions.join(' AND ');
+    }
+    
+    const [[{ total }]] = await pool.query(countQuery, queryParams);
+    
+    // 查询数据
+    let dataQuery = `
+      SELECT 
+        id, rule_type, rule_key, rule_value, description, 
+        is_from_file, is_active, priority, created_by, 
+        created_at, updated_at
+      FROM config_rules
+    `;
+    
+    if (whereConditions.length > 0) {
+      dataQuery += ' WHERE ' + whereConditions.join(' AND ');
+    }
+    
+    dataQuery += ' ORDER BY is_from_file DESC, priority ASC, created_at DESC';
+    dataQuery += ` LIMIT ${pageSize} OFFSET ${offset}`;
+    
+    const [rows] = await pool.query(dataQuery, queryParams);
+    
+    res.json({
+      data: rows,
+      total: total,
+      page: parseInt(page),
+      pageSize: parseInt(pageSize)
+    });
+  } catch (error) {
+    console.error('获取配置规则失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+// 添加新的配置规则
+router.post('/config/rules', async (req, res) => {
+  const { rule_type, rule_key, rule_value, description, priority = 100, created_by = 'USER' } = req.body;
+  
+  // 验证必填字段
+  if (!rule_type || !rule_key) {
+    return res.status(400).json({ error: 'rule_type 和 rule_key 是必填字段' });
+  }
+  
+  // 验证规则类型
+  const validRuleTypes = [
+    'BLACKLIST_USER', 'BLACKLIST_IP', 'WHITELIST_USER', 'WHITELIST_IP',
+    'SENSITIVE_WORD', 'SENSITIVE_PATTERN', 'MODEL_FILTER', 'USER_RESTRICTION'
+  ];
+  
+  if (!validRuleTypes.includes(rule_type)) {
+    return res.status(400).json({ error: '无效的规则类型' });
+  }
+  
+  try {
+    // 检查是否已存在相同的规则
+    const [existingRules] = await pool.query(
+      'SELECT id FROM config_rules WHERE rule_type = ? AND rule_key = ? AND is_active = 1',
+      [rule_type, rule_key]
+    );
+    
+    if (existingRules.length > 0) {
+      return res.status(400).json({ error: '相同的配置规则已存在' });
+    }
+    
+    // 添加新规则
+    const result = await addConfigRule({
+      ruleType: rule_type,
+      ruleKey: rule_key,
+      ruleValue: rule_value,
+      description,
+      createdBy: created_by,
+      priority: parseInt(priority)
+    });
+    
+    res.status(201).json({
+      message: '配置规则添加成功',
+      id: result.insertId
+    });
+  } catch (error) {
+    console.error('添加配置规则失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+// 更新配置规则
+router.put('/config/rules/:id', async (req, res) => {
+  const { id } = req.params;
+  const { rule_value, description, is_active, priority } = req.body;
+  
+  try {
+    // 检查规则是否存在
+    const [existingRules] = await pool.query(
+      'SELECT id, is_from_file FROM config_rules WHERE id = ?',
+      [id]
+    );
+    
+    if (existingRules.length === 0) {
+      return res.status(404).json({ error: '配置规则不存在' });
+    }
+    
+    // 检查是否为文件来源的规则（文件规则不允许修改）
+    if (existingRules[0].is_from_file) {
+      return res.status(403).json({ error: '文件来源的配置规则不允许修改' });
+    }
+    
+    // 构建更新字段
+    const updateFields = {};
+    if (rule_value !== undefined) updateFields.rule_value = rule_value;
+    if (description !== undefined) updateFields.description = description;
+    if (is_active !== undefined) updateFields.is_active = is_active;
+    if (priority !== undefined) updateFields.priority = parseInt(priority);
+    
+    if (Object.keys(updateFields).length === 0) {
+      return res.status(400).json({ error: '没有提供需要更新的字段' });
+    }
+    
+    await updateConfigRule(id, updateFields);
+    
+    res.json({ message: '配置规则更新成功' });
+  } catch (error) {
+    console.error('更新配置规则失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+// 删除配置规则
+router.delete('/config/rules/:id', async (req, res) => {
+  const { id } = req.params;
+  
+  try {
+    // 检查规则是否存在
+    const [existingRules] = await pool.query(
+      'SELECT id, is_from_file FROM config_rules WHERE id = ?',
+      [id]
+    );
+    
+    if (existingRules.length === 0) {
+      return res.status(404).json({ error: '配置规则不存在' });
+    }
+    
+    // 检查是否为文件来源的规则（文件规则不允许删除）
+    if (existingRules[0].is_from_file) {
+      return res.status(403).json({ error: '文件来源的配置规则不允许删除' });
+    }
+    
+    await deleteConfigRule(id);
+    
+    res.json({ message: '配置规则删除成功' });
+  } catch (error) {
+    console.error('删除配置规则失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+// 获取配置规则类型列表
+router.get('/config/rule-types', async (req, res) => {
+  try {
+    const ruleTypes = [
+      {
+        value: 'BLACKLIST_USER',
+        label: '用户黑名单',
+        description: '禁止访问的用户ID列表'
+      },
+      {
+        value: 'BLACKLIST_IP',
+        label: 'IP黑名单',
+        description: '禁止访问的IP地址列表'
+      },
+      {
+        value: 'WHITELIST_USER',
+        label: '用户白名单',
+        description: '允许访问的用户ID列表'
+      },
+      {
+        value: 'WHITELIST_IP',
+        label: 'IP白名单',
+        description: '允许访问的IP地址列表'
+      },
+      {
+        value: 'SENSITIVE_WORD',
+        label: '敏感词',
+        description: '需要过滤的敏感词汇'
+      },
+      {
+        value: 'SENSITIVE_PATTERN',
+        label: '敏感模式',
+        description: '需要检测的敏感内容模式'
+      },
+      {
+        value: 'MODEL_FILTER',
+        label: '模型过滤',
+        description: '特定模型的内容过滤规则'
+      },
+      {
+        value: 'USER_RESTRICTION',
+        label: '用户限制',
+        description: '用户访问模型的限制规则'
+      }
+    ];
+    
+    res.json({ data: ruleTypes });
+  } catch (error) {
+    console.error('获取规则类型失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+// 同步文件配置到数据库
+router.post('/config/sync-files', async (req, res) => {
+  try {
+    await syncFileConfigToDatabase();
+    res.json({ message: '文件配置同步到数据库成功' });
+  } catch (error) {
+    console.error('同步文件配置失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+// 获取配置统计信息
+router.get('/config/stats', async (req, res) => {
+  try {
+    const [stats] = await pool.query(`
+      SELECT 
+        rule_type,
+        COUNT(*) as total_count,
+        SUM(CASE WHEN is_from_file = 1 THEN 1 ELSE 0 END) as file_count,
+        SUM(CASE WHEN is_from_file = 0 THEN 1 ELSE 0 END) as database_count,
+        SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) as active_count
+      FROM config_rules 
+      GROUP BY rule_type
+      ORDER BY rule_type
+    `);
+    
+    res.json({ data: stats });
+  } catch (error) {
+    console.error('获取配置统计失败:', error);
     res.status(500).json({ error: '服务器内部错误' });
   }
 });

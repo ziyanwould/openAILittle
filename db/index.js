@@ -165,6 +165,29 @@ async function initializeDatabase() {
     `);
     console.log('✓ user_ip_flags 表初始化完成');
 
+    // 配置规则管理表 (新增)
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS config_rules (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        rule_type ENUM('BLACKLIST_USER', 'BLACKLIST_IP', 'WHITELIST_USER', 'WHITELIST_IP', 'SENSITIVE_WORD', 'SENSITIVE_PATTERN', 'MODEL_FILTER', 'USER_RESTRICTION') NOT NULL,
+        rule_key VARCHAR(255) NOT NULL COMMENT '规则键名，如用户ID、IP、敏感词等',
+        rule_value TEXT COMMENT '规则值，JSON格式存储复杂数据',
+        description TEXT COMMENT '规则描述',
+        is_from_file BOOLEAN DEFAULT FALSE COMMENT '是否来自配置文件（只读）',
+        is_active BOOLEAN DEFAULT TRUE COMMENT '是否启用',
+        priority INT DEFAULT 100 COMMENT '优先级，数字越小优先级越高',
+        created_by VARCHAR(100) DEFAULT 'SYSTEM' COMMENT '创建者',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_config_type (rule_type),
+        INDEX idx_config_key (rule_key),
+        INDEX idx_config_active (is_active),
+        INDEX idx_config_priority (priority),
+        UNIQUE KEY unique_rule (rule_type, rule_key)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+    console.log('✓ config_rules 表初始化完成');
+
     // ==================== 创建索引 ====================
     console.log('[4/5] 创建索引');
     const indexConfig = [
@@ -486,6 +509,206 @@ async function manageUserIpBan(params) {
   }
 }
 
+/**
+ * 配置规则管理函数
+ */
+
+// 获取所有配置规则（文件+数据库）
+async function getAllConfigRules(ruleType = null) {
+  try {
+    let query = `
+      SELECT * FROM config_rules 
+      WHERE is_active = TRUE
+    `;
+    const params = [];
+    
+    if (ruleType) {
+      query += ' AND rule_type = ?';
+      params.push(ruleType);
+    }
+    
+    query += ' ORDER BY priority ASC, created_at ASC';
+    
+    const [rows] = await pool.query(query, params);
+    return rows;
+  } catch (err) {
+    console.error('获取配置规则失败:', err.message);
+    return [];
+  }
+}
+
+// 添加配置规则
+async function addConfigRule(params) {
+  const { ruleType, ruleKey, ruleValue, description, createdBy = 'ADMIN', priority = 100 } = params;
+  
+  try {
+    const [result] = await pool.query(`
+      INSERT INTO config_rules (rule_type, rule_key, rule_value, description, is_from_file, priority, created_by)
+      VALUES (?, ?, ?, ?, FALSE, ?, ?)
+    `, [ruleType, ruleKey, ruleValue, description, priority, createdBy]);
+    
+    return result;
+  } catch (err) {
+    console.error('添加配置规则失败:', err.message);
+    throw err; // 抛出错误而不是返回null
+  }
+}
+
+// 更新配置规则（只能更新非文件来源的规则）
+async function updateConfigRule(id, params) {
+  const { ruleValue, description, isActive, priority } = params;
+  
+  try {
+    const [result] = await pool.query(`
+      UPDATE config_rules 
+      SET rule_value = ?, description = ?, is_active = ?, priority = ?, updated_at = NOW()
+      WHERE id = ? AND is_from_file = FALSE
+    `, [ruleValue, description, isActive, priority, id]);
+    
+    return result.affectedRows > 0;
+  } catch (err) {
+    console.error('更新配置规则失败:', err.message);
+    return false;
+  }
+}
+
+// 删除配置规则（只能删除非文件来源的规则）
+async function deleteConfigRule(id) {
+  try {
+    const [result] = await pool.query(`
+      DELETE FROM config_rules WHERE id = ? AND is_from_file = FALSE
+    `, [id]);
+    
+    return result.affectedRows > 0;
+  } catch (err) {
+    console.error('删除配置规则失败:', err.message);
+    return false;
+  }
+}
+
+// 同步文件配置到数据库
+async function syncFileConfigToDatabase() {
+  try {
+    // 先清理已存在的文件配置
+    await pool.query('DELETE FROM config_rules WHERE is_from_file = TRUE');
+    
+    const fs = require('fs');
+    const path = require('path');
+    
+    // 同步各种配置文件
+    const configFiles = [
+      { 
+        file: 'config/BlacklistedUsers.txt', 
+        type: 'BLACKLIST_USER',
+        parser: (content) => content.split('\n').filter(line => line.trim())
+      },
+      { 
+        file: 'config/BlacklistedIPs.txt', 
+        type: 'BLACKLIST_IP',
+        parser: (content) => content.split('\n').filter(line => line.trim())
+      },
+      { 
+        file: 'config/Sensitive.txt', 
+        type: 'SENSITIVE_WORD',
+        parser: (content) => content.split('\n').filter(line => line.trim())
+      },
+      { 
+        file: 'config/whitelist.json', 
+        type: 'WHITELIST_USER',
+        parser: (content) => {
+          const data = JSON.parse(content);
+          const rules = [];
+          if (data.userIds) {
+            data.userIds.forEach(userId => rules.push({ key: userId, type: 'WHITELIST_USER' }));
+          }
+          if (data.ips) {
+            data.ips.forEach(ip => rules.push({ key: ip, type: 'WHITELIST_IP' }));
+          }
+          return rules;
+        }
+      },
+      {
+        file: 'config/restrictedUsers.json',
+        type: 'USER_RESTRICTION',
+        parser: (content) => {
+          const data = JSON.parse(content);
+          return Object.entries(data).map(([userId, config]) => ({
+            key: userId,
+            value: JSON.stringify(config)
+          }));
+        }
+      },
+      {
+        file: 'config/sensitive_patterns.json',
+        type: 'SENSITIVE_PATTERN',
+        parser: (content) => {
+          const patterns = JSON.parse(content);
+          return patterns.map(pattern => ({
+            key: pattern.pattern,
+            value: JSON.stringify(pattern)
+          }));
+        }
+      },
+      {
+        file: 'config/filterConfig.json',
+        type: 'MODEL_FILTER',
+        parser: (content) => {
+          const data = JSON.parse(content);
+          return Object.entries(data).map(([key, config]) => ({
+            key: key,
+            value: JSON.stringify(config)
+          }));
+        }
+      }
+    ];
+    
+    for (const configFile of configFiles) {
+      const filePath = path.join(__dirname, '..', configFile.file);
+      
+      if (!fs.existsSync(filePath)) continue;
+      
+      try {
+        const content = fs.readFileSync(filePath, 'utf8').trim();
+        if (!content) continue;
+        
+        let rules = [];
+        
+        if (configFile.parser) {
+          const parsed = configFile.parser(content);
+          if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'object') {
+            rules = parsed;
+          } else if (Array.isArray(parsed)) {
+            rules = parsed.map(item => ({ key: item, value: null }));
+          }
+        }
+        
+        // 插入规则到数据库
+        for (const rule of rules) {
+          const ruleType = rule.type || configFile.type;
+          await pool.query(`
+            INSERT IGNORE INTO config_rules (rule_type, rule_key, rule_value, description, is_from_file, priority, created_by)
+            VALUES (?, ?, ?, ?, TRUE, 1, 'FILE_SYNC')
+          `, [
+            ruleType,
+            rule.key,
+            rule.value || null,
+            `从文件 ${configFile.file} 同步`,
+          ]);
+        }
+        
+      } catch (fileErr) {
+        console.error(`同步文件 ${configFile.file} 失败:`, fileErr.message);
+      }
+    }
+    
+    console.log('配置文件同步到数据库完成');
+    return true;
+  } catch (err) {
+    console.error('同步配置文件失败:', err.message);
+    return false;
+  }
+}
+
 // 导出功能模块
 module.exports = {
   pool,
@@ -495,5 +718,10 @@ module.exports = {
   logModerationResult,
   checkUserIpBanStatus,
   updateViolationCount,
-  manageUserIpBan
+  manageUserIpBan,
+  getAllConfigRules,
+  addConfigRule,
+  updateConfigRule,
+  deleteConfigRule,
+  syncFileConfigToDatabase
 };
