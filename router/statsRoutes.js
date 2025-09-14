@@ -1746,11 +1746,29 @@ router.post('/stats/request-body-rules/import-current', async (req, res) => {
 // ==================== 通知配置管理 API ====================
 
 // 获取通知配置列表
+// 加载预设通知规则
+function loadPredefinedNotificationRules() {
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    const configPath = path.join(__dirname, '..', 'config', 'notificationRules.json');
+
+    if (fs.existsSync(configPath)) {
+      const configData = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      return configData.predefined_rules || [];
+    }
+    return [];
+  } catch (error) {
+    console.error('[预设通知规则] 加载失败:', error.message);
+    return [];
+  }
+}
+
 router.get('/stats/notification-configs', async (req, res) => {
   try {
     const { page = 1, pageSize = 20, config_key, is_active } = req.query;
-    const offset = (page - 1) * pageSize;
 
+    // 加载数据库配置
     let whereConditions = ["config_type = 'NOTIFICATION'"];
     let queryParams = [];
 
@@ -1766,11 +1784,7 @@ router.get('/stats/notification-configs', async (req, res) => {
 
     const whereClause = whereConditions.join(' AND ');
 
-    // 查询总数
-    const countQuery = `SELECT COUNT(*) as total FROM system_configs WHERE ${whereClause}`;
-    const [[{ total }]] = await pool.query(countQuery, queryParams);
-
-    // 查询数据
+    // 查询数据库配置
     const dataQuery = `
       SELECT
         id, config_key, config_value,
@@ -1779,13 +1793,12 @@ router.get('/stats/notification-configs', async (req, res) => {
       FROM system_configs
       WHERE ${whereClause}
       ORDER BY priority ASC, config_key ASC
-      LIMIT ? OFFSET ?
     `;
 
-    const [rows] = await pool.query(dataQuery, [...queryParams, parseInt(pageSize), offset]);
+    const [dbRows] = await pool.query(dataQuery, queryParams);
 
-    // 解析配置JSON，确保安全处理
-    const processedRows = rows.map(row => {
+    // 解析数据库配置JSON
+    const processedDbRows = dbRows.map(row => {
       let configValue;
       try {
         if (typeof row.config_value === 'string') {
@@ -1807,13 +1820,55 @@ router.get('/stats/notification-configs', async (req, res) => {
         priority: row.priority,
         created_by: row.created_by,
         created_at: row.created_at,
-        updated_at: row.updated_at
+        updated_at: row.updated_at,
+        readonly: false
       };
     });
 
+    // 加载预设规则
+    const predefinedRules = loadPredefinedNotificationRules();
+
+    // 转换预设规则格式
+    const processedPredefinedRules = predefinedRules.map(rule => ({
+      id: rule.id,
+      config_key: rule.topic,
+      config_value: {
+        notification_type: rule.type,
+        enabled: rule.enabled,
+        webhook_url: rule.config.webhook_url,
+        api_key: rule.config.pushkey || rule.config.api_key
+      },
+      description: rule.name,
+      is_active: rule.enabled,
+      priority: rule.priority || 1000,
+      created_by: 'SYSTEM',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      readonly: rule.readonly || false
+    }));
+
+    // 过滤预设规则（如果有搜索条件）
+    let filteredPredefinedRules = processedPredefinedRules;
+    if (config_key && config_key.trim() !== '') {
+      filteredPredefinedRules = processedPredefinedRules.filter(rule =>
+        rule.config_key.toLowerCase().includes(config_key.toLowerCase()) ||
+        rule.description.toLowerCase().includes(config_key.toLowerCase())
+      );
+    }
+    if (is_active !== undefined && is_active.trim() !== '') {
+      const activeFilter = is_active === 'true';
+      filteredPredefinedRules = filteredPredefinedRules.filter(rule => rule.is_active === activeFilter);
+    }
+
+    // 合并数据并分页
+    const allData = [...processedDbRows, ...filteredPredefinedRules];
+    const total = allData.length;
+    const offset = (page - 1) * pageSize;
+    const paginatedData = allData.slice(offset, offset + parseInt(pageSize));
+
     res.json({
       success: true,
-      data: processedRows,
+      data: paginatedData,
       total: total,
       page: parseInt(page),
       pageSize: parseInt(pageSize)
@@ -1951,6 +2006,54 @@ router.put('/stats/notification-configs/:id', async (req, res) => {
     });
   } catch (error) {
     console.error('更新通知配置失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+// 更新预设通知规则状态
+router.put('/stats/notification-configs/predefined/:id', async (req, res) => {
+  try {
+    const ruleId = req.params.id;
+    const { enabled } = req.body;
+
+    if (typeof enabled !== 'boolean') {
+      return res.status(400).json({ error: '启用状态必须是布尔值' });
+    }
+
+    // 读取配置文件
+    const fs = require('fs');
+    const path = require('path');
+    const configPath = path.join(__dirname, '..', 'config', 'notificationRules.json');
+
+    if (!fs.existsSync(configPath)) {
+      return res.status(404).json({ error: '预设规则配置文件不存在' });
+    }
+
+    const configData = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const predefinedRules = configData.predefined_rules || [];
+
+    // 查找要更新的规则
+    const ruleIndex = predefinedRules.findIndex(rule => rule.id === ruleId);
+    if (ruleIndex === -1) {
+      return res.status(404).json({ error: '预设规则不存在' });
+    }
+
+    // 更新规则状态
+    predefinedRules[ruleIndex].enabled = enabled;
+
+    // 写回配置文件
+    configData.predefined_rules = predefinedRules;
+    fs.writeFileSync(configPath, JSON.stringify(configData, null, 2), 'utf8');
+
+    // 清除通知配置缓存
+    // 发送信号给主进程清除缓存（如果需要的话）
+
+    res.json({
+      success: true,
+      message: '预设规则状态更新成功'
+    });
+  } catch (error) {
+    console.error('更新预设规则失败:', error);
     res.status(500).json({ error: '服务器内部错误' });
   }
 });

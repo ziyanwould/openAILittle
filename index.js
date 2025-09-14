@@ -118,7 +118,25 @@ let notificationConfigCache = [];
 let lastNotificationConfigLoad = 0;
 const NOTIFICATION_CONFIG_CACHE_DURATION = 5 * 60 * 1000; // 5分钟缓存
 
-// 加载通知配置
+// 加载配置文件规则
+function loadPredefinedRules() {
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    const configPath = path.join(__dirname, 'config', 'notificationRules.json');
+
+    if (fs.existsSync(configPath)) {
+      const configData = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      return configData.predefined_rules || [];
+    }
+    return [];
+  } catch (error) {
+    console.error('[预设规则] 加载失败:', error.message);
+    return [];
+  }
+}
+
+// 加载通知配置（包含数据库配置和预设规则）
 async function loadNotificationConfigs() {
   try {
     const now = Date.now();
@@ -126,9 +144,31 @@ async function loadNotificationConfigs() {
       return notificationConfigCache;
     }
 
-    notificationConfigCache = await getNotificationConfigs();
+    // 加载数据库配置
+    const dbConfigs = await getNotificationConfigs();
+
+    // 加载预设规则
+    const predefinedRules = loadPredefinedRules();
+
+    // 合并配置，数据库配置优先级更高
+    notificationConfigCache = [...dbConfigs, ...predefinedRules.map(rule => ({
+      id: rule.id,
+      config_key: rule.topic,
+      config_value: {
+        notification_type: rule.type,
+        enabled: rule.enabled,
+        ...rule.config,
+        webhook_url: rule.config.webhook_url ? process.env.TARGET_SERVER_FEISHU + rule.config.webhook_url : undefined,
+        api_key: rule.config.pushkey || rule.config.api_key
+      },
+      description: rule.name,
+      is_active: rule.enabled,
+      priority: rule.priority || 1000,
+      readonly: rule.readonly || false
+    }))];
+
     lastNotificationConfigLoad = now;
-    console.log(`[通知配置] 已加载 ${notificationConfigCache.length} 个配置`);
+    console.log(`[通知配置] 已加载 ${dbConfigs.length} 个数据库配置 + ${predefinedRules.length} 个预设规则`);
     return notificationConfigCache;
   } catch (error) {
     console.error('[通知配置] 加载失败:', error.message);

@@ -1,0 +1,92 @@
+{
+  "predefined_rules": [
+    {
+      "id": "robot_pushdeer",
+      "name": "Robot PushDeer",
+      "topic": "robot",
+      "type": "pushdeer",
+      "enabled": false,
+      "readonly": true,
+      "config": {
+        "pushkey": "PDU33066TepraNW9hJp3GP5NWPCVgVaGpoxtU3EMa"
+      }
+    },
+    {
+      "id": "robot_lark",
+      "name": "Robot Lark",
+      "topic": "robot",
+      "type": "lark",
+      "enabled": true,
+      "readonly": true,
+      "config": {
+        "webhook_url": "b99372d6-61f8-4fcc-bd6f-01689652fa08"
+      }
+    },
+    {
+      "id": "gemini_pushdeer",
+      "name": "Gemini PushDeer",
+      "topic": "gemini",
+      "type": "pushdeer",
+      "enabled": true,
+      "readonly": true,
+      "config": {
+        "pushkey": "PDU33066TL6i6CtArA8KIH2u7Q9VwYEVCRfQQU9h2"
+      }
+    },
+    {
+      "id": "gemini_lark",
+      "name": "Gemini Lark",
+      "topic": "gemini",
+      "type": "lark",
+      "enabled": true,
+      "readonly": true,
+      "config": {
+        "webhook_url": "da771957-c1a4-4a91-88e4-08e6a6dfc73e"
+      }
+    },
+    {
+      "id": "chatnio_pushdeer",
+      "name": "ChatNio PushDeer",
+      "topic": "chatnio",
+      "type": "pushdeer",
+      "enabled": true,
+      "readonly": true,
+      "config": {
+        "pushkey": "PDU33066TEFmDgjEuuyFFCpJ8Iq13m0lZaT8eNywx"
+      }
+    },
+    {
+      "id": "chatnio_lark",
+      "name": "ChatNio Lark",
+      "topic": "chatnio",
+      "type": "lark",
+      "enabled": true,
+      "readonly": true,
+      "config": {
+        "webhook_url": "8097380c-fb36-4af6-8e19-570c75ce84a1"
+      }
+    },
+    {
+      "id": "freelyai_pushdeer",
+      "name": "FreelyAI PushDeer",
+      "topic": "freelyai",
+      "type": "pushdeer",
+      "enabled": true,
+      "readonly": true,
+      "config": {
+        "pushkey": "PDU33066Te6j12xoa58EHg6MfQoepHcgWhM152xZ1"
+      }
+    },
+    {
+      "id": "freelyai_lark",
+      "name": "FreelyAI Lark",
+      "topic": "freelyai",
+      "type": "lark",
+      "enabled": true,
+      "readonly": true,
+      "config": {
+        "webhook_url": "1a409aca-2336-4bd2-a143-6c1347570388"
+      }
+    }
+  ]
+}
