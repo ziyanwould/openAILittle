@@ -1390,7 +1390,18 @@ router.get('/stats/request-body-rules', async (req, res) => {
 
     // 解析配置JSON，提取规则字段
     const processedRows = rows.map(row => {
-      const config = JSON.parse(row.config_value || '{}');
+      // 安全地解析配置，处理已经是对象的情况
+      let config;
+      try {
+        if (typeof row.config_value === 'string') {
+          config = JSON.parse(row.config_value || '{}');
+        } else {
+          config = row.config_value || {};
+        }
+      } catch (error) {
+        console.error(`解析配置失败 (ID: ${row.id}):`, error.message);
+        config = {};
+      }
       return {
         id: row.id,
         rule_name: config.rule_name || row.config_key,
@@ -1498,7 +1509,18 @@ router.put('/stats/request-body-rules/:id', async (req, res) => {
       return res.status(404).json({ error: '请求体修改规则不存在' });
     }
 
-    const currentConfig = JSON.parse(existingRules[0].config_value);
+    // 安全解析配置值
+    let currentConfig;
+    try {
+      if (typeof existingRules[0].config_value === 'string') {
+        currentConfig = JSON.parse(existingRules[0].config_value || '{}');
+      } else {
+        currentConfig = existingRules[0].config_value || {};
+      }
+    } catch (error) {
+      console.error(`解析规则配置失败 (ID: ${id}):`, error.message);
+      currentConfig = {};
+    }
 
     // 构建更新字段
     const updateFields = [];
