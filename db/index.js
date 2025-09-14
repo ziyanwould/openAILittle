@@ -192,7 +192,7 @@ async function initializeDatabase() {
     await connection.query(`
       CREATE TABLE IF NOT EXISTS system_configs (
         id INT AUTO_INCREMENT PRIMARY KEY,
-        config_type ENUM('MODERATION', 'RATE_LIMIT', 'AUXILIARY_MODEL', 'CHATNIO_LIMIT', 'AUTOBAN', 'REQUEST_BODY_MODIFY') NOT NULL,
+        config_type ENUM('MODERATION', 'RATE_LIMIT', 'AUXILIARY_MODEL', 'CHATNIO_LIMIT', 'AUTOBAN', 'REQUEST_BODY_MODIFY', 'NOTIFICATION') NOT NULL,
         config_key VARCHAR(255) NOT NULL COMMENT '配置键名，如模型名、路由名等',
         config_value JSON NOT NULL COMMENT '配置值，JSON格式存储',
         description TEXT COMMENT '配置描述',
@@ -229,13 +229,13 @@ async function initializeDatabase() {
         const currentEnum = enumInfo[0].COLUMN_TYPE;
 
         // 检查是否缺少新的枚举值
-        const needsUpdate = !currentEnum.includes('AUTOBAN') || !currentEnum.includes('REQUEST_BODY_MODIFY');
+        const needsUpdate = !currentEnum.includes('AUTOBAN') || !currentEnum.includes('REQUEST_BODY_MODIFY') || !currentEnum.includes('NOTIFICATION');
 
         if (needsUpdate) {
           await connection.query(`
             ALTER TABLE system_configs
             MODIFY COLUMN config_type
-            ENUM('MODERATION', 'RATE_LIMIT', 'AUXILIARY_MODEL', 'CHATNIO_LIMIT', 'AUTOBAN', 'REQUEST_BODY_MODIFY')
+            ENUM('MODERATION', 'RATE_LIMIT', 'AUXILIARY_MODEL', 'CHATNIO_LIMIT', 'AUTOBAN', 'REQUEST_BODY_MODIFY', 'NOTIFICATION')
             NOT NULL
           `);
           console.log('✓ system_configs.config_type ENUM 字段更新完成');
@@ -1129,6 +1129,47 @@ async function getRequestBodyModifyRules() {
   }
 }
 
+// 获取通知配置
+async function getNotificationConfigs() {
+  try {
+    const [configs] = await pool.query(`
+      SELECT *
+      FROM system_configs
+      WHERE config_type = 'NOTIFICATION'
+        AND is_active = TRUE
+      ORDER BY priority ASC, id ASC
+    `);
+
+    return configs.map(config => {
+      // 安全地解析配置，处理已经是对象的情况
+      let configValue;
+      try {
+        if (typeof config.config_value === 'string') {
+          configValue = JSON.parse(config.config_value || '{}');
+        } else {
+          configValue = config.config_value || {};
+        }
+      } catch (error) {
+        console.error(`解析通知配置失败 (ID: ${config.id}):`, error.message);
+        configValue = {};
+      }
+      return {
+        id: config.id,
+        config_key: config.config_key,
+        config_value: configValue,
+        description: config.description,
+        is_active: config.is_active,
+        priority: config.priority,
+        created_at: config.created_at,
+        updated_at: config.updated_at
+      };
+    });
+  } catch (error) {
+    console.error('获取通知配置失败:', error);
+    throw error;
+  }
+}
+
 // 导出功能模块
 module.exports = {
   pool,
@@ -1153,5 +1194,7 @@ module.exports = {
   resetSystemConfigsToDefaults,
   initializeSystemConfigs,
   // 请求体修改规则
-  getRequestBodyModifyRules
+  getRequestBodyModifyRules,
+  // 通知配置管理
+  getNotificationConfigs
 };

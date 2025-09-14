@@ -1,4 +1,4 @@
-const fetch = require('node-fetch'); // 或使用原生 fetch
+// 使用原生 fetch (Node.js 18+)
 
 async function sendDingTalkNotification(message, webhookUrl) {
   try {

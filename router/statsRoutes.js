@@ -1,13 +1,14 @@
 // statsRoutes.js
 const router = require('express').Router();
-const { 
-  pool, 
+const {
+  pool,
   manageUserIpBan,
   getSystemConfigs,
   addSystemConfig,
   updateSystemConfig,
   deleteSystemConfig,
-  resetSystemConfigsToDefaults
+  resetSystemConfigsToDefaults,
+  getNotificationConfigs
 } = require('../db');
 
 // 基础查询构建器 (添加分页参数)
@@ -1739,6 +1740,318 @@ router.post('/stats/request-body-rules/import-current', async (req, res) => {
   } catch (error) {
     console.error('导入当前规则失败:', error);
     res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+// ==================== 通知配置管理 API ====================
+
+// 获取通知配置列表
+router.get('/stats/notification-configs', async (req, res) => {
+  try {
+    const { page = 1, pageSize = 20, config_key, is_active } = req.query;
+    const offset = (page - 1) * pageSize;
+
+    let whereConditions = ["config_type = 'NOTIFICATION'"];
+    let queryParams = [];
+
+    if (config_key && config_key.trim() !== '') {
+      whereConditions.push('config_key LIKE ?');
+      queryParams.push(`%${config_key}%`);
+    }
+
+    if (is_active !== undefined && is_active.trim() !== '') {
+      whereConditions.push('is_active = ?');
+      queryParams.push(is_active === 'true' ? 1 : 0);
+    }
+
+    const whereClause = whereConditions.join(' AND ');
+
+    // 查询总数
+    const countQuery = `SELECT COUNT(*) as total FROM system_configs WHERE ${whereClause}`;
+    const [[{ total }]] = await pool.query(countQuery, queryParams);
+
+    // 查询数据
+    const dataQuery = `
+      SELECT
+        id, config_key, config_value,
+        description, is_active, priority,
+        created_by, created_at, updated_at
+      FROM system_configs
+      WHERE ${whereClause}
+      ORDER BY priority ASC, config_key ASC
+      LIMIT ? OFFSET ?
+    `;
+
+    const [rows] = await pool.query(dataQuery, [...queryParams, parseInt(pageSize), offset]);
+
+    // 解析配置JSON，确保安全处理
+    const processedRows = rows.map(row => {
+      let configValue;
+      try {
+        if (typeof row.config_value === 'string') {
+          configValue = JSON.parse(row.config_value || '{}');
+        } else {
+          configValue = row.config_value || {};
+        }
+      } catch (error) {
+        console.error(`解析通知配置失败 (ID: ${row.id}):`, error.message);
+        configValue = {};
+      }
+
+      return {
+        id: row.id,
+        config_key: row.config_key,
+        config_value: configValue,
+        description: row.description,
+        is_active: Boolean(row.is_active),
+        priority: row.priority,
+        created_by: row.created_by,
+        created_at: row.created_at,
+        updated_at: row.updated_at
+      };
+    });
+
+    res.json({
+      success: true,
+      data: processedRows,
+      total: total,
+      page: parseInt(page),
+      pageSize: parseInt(pageSize)
+    });
+  } catch (error) {
+    console.error('获取通知配置失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+// 添加通知配置
+router.post('/stats/notification-configs', async (req, res) => {
+  try {
+    const {
+      config_key,
+      notification_type,
+      enabled = false,
+      webhook_url = '',
+      api_key = '',
+      topic = '',
+      description = '',
+      priority = 100
+    } = req.body;
+
+    // 参数验证
+    if (!config_key || !config_key.trim()) {
+      return res.status(400).json({ error: '配置键名不能为空' });
+    }
+
+    if (!notification_type || !['pushdeer', 'lark', 'dingtalk', 'ntfy'].includes(notification_type)) {
+      return res.status(400).json({ error: '通知类型必须是 pushdeer、lark、dingtalk 或 ntfy' });
+    }
+
+    // 构建配置对象
+    const configValue = {
+      notification_type,
+      enabled: Boolean(enabled),
+      webhook_url,
+      api_key,
+      topic,
+      priority: parseInt(priority)
+    };
+
+    const result = await addSystemConfig({
+      configType: 'NOTIFICATION',
+      configKey: config_key.trim(),
+      configValue,
+      description: description.trim(),
+      createdBy: 'ADMIN',
+      priority: parseInt(priority)
+    });
+
+    res.json({
+      success: true,
+      message: '通知配置添加成功',
+      id: result.insertId
+    });
+  } catch (error) {
+    console.error('添加通知配置失败:', error);
+    if (error.code === 'ER_DUP_ENTRY') {
+      res.status(400).json({ error: '配置键名已存在' });
+    } else {
+      res.status(500).json({ error: '服务器内部错误' });
+    }
+  }
+});
+
+// 更新通知配置
+router.put('/stats/notification-configs/:id', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (!id || id <= 0) {
+      return res.status(400).json({ error: '无效的配置ID' });
+    }
+
+    // 检查是否仅更新状态
+    if (Object.keys(req.body).length === 1 && req.body.hasOwnProperty('is_active')) {
+      const { is_active } = req.body;
+
+      const [result] = await pool.query(
+        'UPDATE system_configs SET is_active = ?, updated_at = NOW() WHERE id = ? AND config_type = "NOTIFICATION"',
+        [Boolean(is_active), id]
+      );
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({ error: '通知配置不存在' });
+      }
+
+      return res.json({
+        success: true,
+        message: '通知配置状态更新成功'
+      });
+    }
+
+    // 完整配置更新
+    const {
+      notification_type,
+      enabled,
+      webhook_url,
+      api_key,
+      topic,
+      description,
+      priority,
+      is_active
+    } = req.body;
+
+    if (notification_type && !['pushdeer', 'lark', 'dingtalk', 'ntfy'].includes(notification_type)) {
+      return res.status(400).json({ error: '通知类型必须是 pushdeer、lark、dingtalk 或 ntfy' });
+    }
+
+    // 构建配置对象
+    const configValue = {
+      notification_type,
+      enabled: Boolean(enabled),
+      webhook_url: webhook_url || '',
+      api_key: api_key || '',
+      topic: topic || '',
+      priority: parseInt(priority) || 100
+    };
+
+    const success = await updateSystemConfig(id, {
+      configValue,
+      description: description || '',
+      isActive: Boolean(is_active),
+      priority: parseInt(priority) || 100
+    });
+
+    if (!success) {
+      return res.status(404).json({ error: '通知配置不存在' });
+    }
+
+    res.json({
+      success: true,
+      message: '通知配置更新成功'
+    });
+  } catch (error) {
+    console.error('更新通知配置失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+// 删除通知配置
+router.delete('/stats/notification-configs/:id', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (!id || id <= 0) {
+      return res.status(400).json({ error: '无效的配置ID' });
+    }
+
+    const [result] = await pool.query(
+      'DELETE FROM system_configs WHERE id = ? AND config_type = "NOTIFICATION"',
+      [id]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: '通知配置不存在' });
+    }
+
+    res.json({
+      success: true,
+      message: '通知配置删除成功'
+    });
+  } catch (error) {
+    console.error('删除通知配置失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+// 测试通知配置
+router.post('/stats/notification-configs/:id/test', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (!id || id <= 0) {
+      return res.status(400).json({ error: '无效的配置ID' });
+    }
+
+    // 获取配置
+    const [configs] = await pool.query(
+      'SELECT config_key, config_value FROM system_configs WHERE id = ? AND config_type = "NOTIFICATION"',
+      [id]
+    );
+
+    if (configs.length === 0) {
+      return res.status(404).json({ error: '通知配置不存在' });
+    }
+
+    const config = configs[0];
+    let configValue;
+    try {
+      if (typeof config.config_value === 'string') {
+        configValue = JSON.parse(config.config_value || '{}');
+      } else {
+        configValue = config.config_value || {};
+      }
+    } catch (error) {
+      return res.status(400).json({ error: '配置格式错误' });
+    }
+
+    // 构建测试消息
+    const testMessage = {
+      ip: '127.0.0.1',
+      userId: 'test_user',
+      modelName: 'test-model',
+      time: new Date().toLocaleString('zh-CN')
+    };
+
+    const testContent = `测试消息\n模型：${testMessage.modelName}\nIP 地址：${testMessage.ip}\n用户 ID：${testMessage.userId}\n时间：${testMessage.time}`;
+
+    let testResult;
+
+    switch (configValue.notification_type) {
+      case 'pushdeer':
+        const { sendNotification } = require('../notices/pushDeerNotifier');
+        testResult = await sendNotification(testMessage, testContent, configValue.api_key);
+        break;
+      case 'lark':
+        const { sendLarkNotification } = require('../notices/larkNotifier');
+        testResult = await sendLarkNotification(testMessage, testContent, configValue.webhook_url);
+        break;
+      case 'dingtalk':
+        const { sendDingTalkNotification } = require('../notices/dingTalkNotifier');
+        testResult = await sendDingTalkNotification(testContent, configValue.webhook_url);
+        break;
+      case 'ntfy':
+        const { sendNTFYNotification } = require('../notices/ntfyNotifier');
+        testResult = await sendNTFYNotification(testMessage, testContent, configValue.topic, configValue.api_key);
+        break;
+      default:
+        return res.status(400).json({ error: '不支持的通知类型' });
+    }
+
+    res.json({
+      success: true,
+      message: '测试通知发送成功'
+    });
+  } catch (error) {
+    console.error('测试通知发送失败:', error);
+    res.status(500).json({ error: '测试通知发送失败: ' + error.message });
   }
 });
 

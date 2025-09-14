@@ -27,7 +27,9 @@ const {
  } = require('./utils');
 const modifyRequestBodyMiddleware  = require('./modules/modifyRequestBodyMiddleware'); // 模型参数修正统一处理
 const { sendNotification } = require('./notices/pushDeerNotifier'); // 引入 pushDeerNotifier.js 文件中的 sendNotification 函数
-const { sendLarkNotification } = require('./notices/larkNotifier'); // 引入 pushDeerNotifier.js 文件中的 sendNotification 函数
+const { sendLarkNotification } = require('./notices/larkNotifier'); // 引入 larkNotifier.js 文件中的 sendLarkNotification 函数
+const { sendDingTalkNotification } = require('./notices/dingTalkNotifier'); // 引入 dingTalkNotifier.js 文件中的 sendDingTalkNotification 函数
+const { sendNTFYNotification } = require('./notices/ntfyNotifier'); // 引入 ntfyNotifier.js 文件中的 sendNTFYNotification 函数
 const chatnioRateLimits = require('./modules/chatnioRateLimits'); // 引入 chatnio 限流配置
 const modelRateLimits = require('./modules/modelRateLimits'); // 定义不同模型的多重限流配置 Doubao-Seaweed
 const auxiliaryModels = require('./modules/auxiliaryModels'); // 定义辅助模型列表
@@ -35,7 +37,7 @@ const limitRequestBodyLength = require('./middleware/limitRequestBodyLength'); /
 const loggingMiddleware = require('./middleware/loggingMiddleware'); // 引入日志中间件
 const contentModerationMiddleware = require('./middleware/contentModerationMiddleware'); // 引入内容审查中间件
 const configManager = require('./middleware/configManager'); // 引入配置管理器
-const { initializeSystemConfigs } = require('./db'); // 引入系统配置初始化
+const { initializeSystemConfigs, getNotificationConfigs } = require('./db'); // 引入系统配置初始化
 
 const chatnioRateLimiters = {}; // 用于存储 chatnio 的限流器
 // 在文件开头引入 dotenv
@@ -111,28 +113,91 @@ async function loadWhitelistFromConfigManager() {
 const defaultLengthLimiter = limitRequestBodyLength(15000, `请求文本过长，请缩短后再试。${UPGRADE_MESSAGE}`, whitelistedUserIds, whitelistedIPs);
 
 // 通知类迁移到 notices
-async function notices(data, requestBody, ntfyTopic = 'robot') {
+// 通知配置缓存和加载
+let notificationConfigCache = [];
+let lastNotificationConfigLoad = 0;
+const NOTIFICATION_CONFIG_CACHE_DURATION = 5 * 60 * 1000; // 5分钟缓存
 
-  let pushkey = 'PDU33066TepraNW9hJp3GP5NWPCVgVaGpoxtU3EMa';
-  let webhookUrl = process.env.TARGET_SERVER_FEISHU + 'b99372d6-61f8-4fcc-bd6f-01689652fa08' // 默认，可以认为是 robot 通道
+// 加载通知配置
+async function loadNotificationConfigs() {
+  try {
+    const now = Date.now();
+    if (now - lastNotificationConfigLoad < NOTIFICATION_CONFIG_CACHE_DURATION) {
+      return notificationConfigCache;
+    }
 
-  switch (ntfyTopic) {
-    case 'gemini':
-      pushkey = 'PDU33066TL6i6CtArA8KIH2u7Q9VwYEVCRfQQU9h2';
-      webhookUrl = process.env.TARGET_SERVER_FEISHU + 'da771957-c1a4-4a91-88e4-08e6a6dfc73e'
-      break;
-    case 'chatnio':
-      pushkey = 'PDU33066TEFmDgjEuuyFFCpJ8Iq13m0lZaT8eNywx';
-      webhookUrl = process.env.TARGET_SERVER_FEISHU + '8097380c-fb36-4af6-8e19-570c75ce84a1'
-      break; //** 缺少 break; 这里导致了 chatnio 执行后会继续执行 freelyai 的逻辑！**
-    case 'freelyai':
-      pushkey = 'PDU33066Te6j12xoa58EHg6MfQoepHcgWhM152xZ1';
-      webhookUrl = process.env.TARGET_SERVER_FEISHU + '1a409aca-2336-4bd2-a143-6c1347570388'
-      break;
+    notificationConfigCache = await getNotificationConfigs();
+    lastNotificationConfigLoad = now;
+    console.log(`[通知配置] 已加载 ${notificationConfigCache.length} 个配置`);
+    return notificationConfigCache;
+  } catch (error) {
+    console.error('[通知配置] 加载失败:', error.message);
+    return [];
   }
+}
 
-  sendNotification(data, requestBody, pushkey);
-  sendLarkNotification(data, requestBody, webhookUrl);
+// 新的数据库驱动通知函数
+async function notices(data, requestBody, ntfyTopic = 'robot') {
+  try {
+    const configs = await loadNotificationConfigs();
+
+    // 过滤启用的通知配置，支持主题匹配
+    const activeConfigs = configs.filter(config =>
+      config.is_active &&
+      config.config_value.enabled &&
+      (config.config_key === ntfyTopic || config.config_key === 'global')
+    );
+
+    if (activeConfigs.length === 0) {
+      console.log(`[通知] 未找到主题 "${ntfyTopic}" 的启用配置`);
+      return;
+    }
+
+    // 构建通知消息内容
+    const message = `模型：${data.modelName}\nIP 地址：${data.ip}\n用户 ID：${data.userId}\n时间：${data.time}\n用户请求内容：\n${requestBody}`;
+
+    // 并发发送所有启用的通知
+    const notifications = activeConfigs.map(async (config) => {
+      try {
+        const { notification_type, webhook_url, api_key, topic } = config.config_value;
+
+        switch (notification_type) {
+          case 'pushdeer':
+            if (api_key) {
+              await sendNotification(data, requestBody, api_key);
+              console.log(`[通知] PushDeer 通知发送成功 (${config.config_key})`);
+            }
+            break;
+          case 'lark':
+            if (webhook_url) {
+              await sendLarkNotification(data, requestBody, webhook_url);
+              console.log(`[通知] Lark 通知发送成功 (${config.config_key})`);
+            }
+            break;
+          case 'dingtalk':
+            if (webhook_url) {
+              await sendDingTalkNotification(message, webhook_url);
+              console.log(`[通知] DingTalk 通知发送成功 (${config.config_key})`);
+            }
+            break;
+          case 'ntfy':
+            if (topic && api_key) {
+              await sendNTFYNotification(data, requestBody, topic, api_key);
+              console.log(`[通知] Ntfy 通知发送成功 (${config.config_key})`);
+            }
+            break;
+          default:
+            console.warn(`[通知] 不支持的通知类型: ${notification_type}`);
+        }
+      } catch (error) {
+        console.error(`[通知] ${config.config_key} 发送失败:`, error.message);
+      }
+    });
+
+    await Promise.allSettled(notifications);
+  } catch (error) {
+    console.error('[通知] 系统发送失败:', error.message);
+  }
 }
 
 // 定义敏感词和黑名单文件路径（保留兼容性）
