@@ -1348,5 +1348,377 @@ router.post('/stats/autoban-config/reset', async (req, res) => {
   }
 });
 
+// ==================== 请求体修改配置管理 API ====================
+
+// 获取请求体修改规则
+router.get('/stats/request-body-rules', async (req, res) => {
+  try {
+    const { page = 1, pageSize = 20, model_pattern, is_active } = req.query;
+    const offset = (page - 1) * pageSize;
+
+    let whereConditions = ["config_type = 'REQUEST_BODY_MODIFY'"];
+    let queryParams = [];
+
+    if (model_pattern && model_pattern.trim() !== '') {
+      whereConditions.push('config_key LIKE ?');
+      queryParams.push(`%${model_pattern}%`);
+    }
+
+    if (is_active !== undefined && is_active.trim() !== '') {
+      whereConditions.push('is_active = ?');
+      queryParams.push(is_active === 'true' ? 1 : 0);
+    }
+
+    const whereClause = whereConditions.join(' AND ');
+
+    // 查询总数
+    const countQuery = `SELECT COUNT(*) as total FROM system_configs WHERE ${whereClause}`;
+    const [[{ total }]] = await pool.query(countQuery, queryParams);
+
+    // 查询数据
+    const dataQuery = `
+      SELECT
+        id, config_key, config_value,
+        is_active, created_by, created_at, updated_at
+      FROM system_configs
+      WHERE ${whereClause}
+      ORDER BY JSON_EXTRACT(config_value, '$.priority') ASC, created_at DESC
+      LIMIT ? OFFSET ?
+    `;
+
+    const [rows] = await pool.query(dataQuery, [...queryParams, parseInt(pageSize), offset]);
+
+    // 解析配置JSON，提取规则字段
+    const processedRows = rows.map(row => {
+      const config = JSON.parse(row.config_value || '{}');
+      return {
+        id: row.id,
+        rule_name: config.rule_name || row.config_key,
+        model_pattern: config.model_pattern,
+        condition_type: config.condition_type,
+        condition_config: config.condition_config,
+        action_type: config.action_type,
+        action_config: config.action_config,
+        description: config.description,
+        priority: config.priority,
+        is_active: row.is_active,
+        created_by: row.created_by,
+        created_at: row.created_at,
+        updated_at: row.updated_at
+      };
+    });
+
+    res.json({
+      data: processedRows,
+      total: total,
+      page: parseInt(page),
+      pageSize: parseInt(pageSize),
+      message: '获取请求体修改规则成功'
+    });
+  } catch (error) {
+    console.error('获取请求体修改规则失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+// 添加请求体修改规则
+router.post('/stats/request-body-rules', async (req, res) => {
+  try {
+    const {
+      model_pattern,
+      modification_rules,
+      description,
+      priority = 100,
+      is_active = true
+    } = req.body;
+
+    // 参数验证
+    if (!model_pattern || !model_pattern.trim()) {
+      return res.status(400).json({ error: '模型匹配规则不能为空' });
+    }
+
+    if (!modification_rules || typeof modification_rules !== 'object') {
+      return res.status(400).json({ error: '修改规则必须是有效的JSON对象' });
+    }
+
+    // 检查是否已存在相同的模型匹配规则
+    const [existingRules] = await pool.query(
+      `SELECT id FROM system_configs
+       WHERE config_type = 'REQUEST_BODY_MODIFY' AND config_key = ? AND is_active = 1`,
+      [model_pattern.trim()]
+    );
+
+    if (existingRules.length > 0) {
+      return res.status(400).json({ error: '相同的模型匹配规则已存在' });
+    }
+
+    // 添加新规则
+    const [result] = await pool.query(`
+      INSERT INTO system_configs
+      (config_type, config_key, config_value, description, priority, is_active, created_by)
+      VALUES ('REQUEST_BODY_MODIFY', ?, ?, ?, ?, ?, 'USER')
+    `, [
+      model_pattern.trim(),
+      JSON.stringify(modification_rules),
+      description || '',
+      parseInt(priority),
+      is_active ? 1 : 0
+    ]);
+
+    res.status(201).json({
+      message: '请求体修改规则添加成功',
+      id: result.insertId,
+      data: {
+        model_pattern: model_pattern.trim(),
+        modification_rules,
+        description,
+        priority: parseInt(priority),
+        is_active
+      }
+    });
+  } catch (error) {
+    console.error('添加请求体修改规则失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+// 更新请求体修改规则
+router.put('/stats/request-body-rules/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const requestData = req.body;
+
+    // 检查规则是否存在并获取现有配置
+    const [existingRules] = await pool.query(
+      `SELECT config_value, is_active FROM system_configs WHERE id = ? AND config_type = 'REQUEST_BODY_MODIFY'`,
+      [id]
+    );
+
+    if (existingRules.length === 0) {
+      return res.status(404).json({ error: '请求体修改规则不存在' });
+    }
+
+    const currentConfig = JSON.parse(existingRules[0].config_value);
+
+    // 构建更新字段
+    const updateFields = [];
+    const updateValues = [];
+
+    // 如果只更新 is_active 状态（状态切换）
+    if (Object.keys(requestData).length === 1 && requestData.hasOwnProperty('is_active')) {
+      updateFields.push('is_active = ?');
+      updateValues.push(requestData.is_active ? 1 : 0);
+    } else {
+      // 完整规则更新
+      const updatedConfig = {
+        ...currentConfig,
+        rule_name: requestData.rule_name || currentConfig.rule_name,
+        model_pattern: requestData.model_pattern || currentConfig.model_pattern,
+        condition_type: requestData.condition_type || currentConfig.condition_type,
+        condition_config: requestData.condition_config !== undefined ? requestData.condition_config : currentConfig.condition_config,
+        action_type: requestData.action_type || currentConfig.action_type,
+        action_config: requestData.action_config !== undefined ? requestData.action_config : currentConfig.action_config,
+        description: requestData.description || currentConfig.description,
+        priority: requestData.priority !== undefined ? requestData.priority : currentConfig.priority
+      };
+
+      updateFields.push('config_value = ?');
+      updateValues.push(JSON.stringify(updatedConfig));
+
+      if (requestData.is_active !== undefined) {
+        updateFields.push('is_active = ?');
+        updateValues.push(requestData.is_active ? 1 : 0);
+      }
+    }
+
+    if (updateFields.length === 0) {
+      return res.status(400).json({ error: '没有提供需要更新的字段' });
+    }
+
+    updateFields.push('updated_at = NOW()');
+    updateValues.push(id);
+
+    await pool.query(`
+      UPDATE system_configs
+      SET ${updateFields.join(', ')}
+      WHERE id = ?
+    `, updateValues);
+
+    res.json({
+      message: '请求体修改规则更新成功'
+    });
+  } catch (error) {
+    console.error('更新请求体修改规则失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+// 删除请求体修改规则
+router.delete('/stats/request-body-rules/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // 检查规则是否存在
+    const [existingRules] = await pool.query(
+      `SELECT id FROM system_configs WHERE id = ? AND config_type = 'REQUEST_BODY_MODIFY'`,
+      [id]
+    );
+
+    if (existingRules.length === 0) {
+      return res.status(404).json({ error: '请求体修改规则不存在' });
+    }
+
+    await pool.query(`DELETE FROM system_configs WHERE id = ?`, [id]);
+
+    res.json({
+      message: '请求体修改规则删除成功'
+    });
+  } catch (error) {
+    console.error('删除请求体修改规则失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+// 批量导入当前中间件规则
+router.post('/stats/request-body-rules/import-current', async (req, res) => {
+  try {
+    const currentRules = [
+      {
+        model_pattern: 'huggingface/*',
+        modification_rules: {
+          conditions: [{ field: 'top_p', condition: 'exists_and_less_than', value: 1 }],
+          modifications: [{ field: 'top_p', action: 'set_value', value: 0.5 }]
+        },
+        description: 'Huggingface模型top_p参数优化',
+        priority: 10
+      },
+      {
+        model_pattern: 'Baichuan*',
+        modification_rules: {
+          conditions: [],
+          modifications: [{ field: 'frequency_penalty', action: 'set_value', value: 1 }]
+        },
+        description: 'Baichuan模型frequency_penalty参数设置',
+        priority: 20
+      },
+      {
+        model_pattern: '*glm-4v*',
+        modification_rules: {
+          conditions: [],
+          modifications: [{ field: 'max_tokens', action: 'set_value', value: 1024 }]
+        },
+        description: 'GLM-4V模型max_tokens参数限制',
+        priority: 30
+      },
+      {
+        model_pattern: 'o3-mini',
+        modification_rules: {
+          conditions: [],
+          modifications: [{ field: 'top_p', action: 'delete_field' }]
+        },
+        description: 'O3-mini模型移除top_p参数',
+        priority: 40
+      },
+      {
+        model_pattern: 'o1-mini',
+        modification_rules: {
+          conditions: [],
+          modifications: [{ field: 'top_p', action: 'delete_field' }]
+        },
+        description: 'O1-mini模型移除top_p参数',
+        priority: 50
+      },
+      {
+        model_pattern: 'tts-1',
+        modification_rules: {
+          conditions: [],
+          modifications: [
+            { field: 'model', action: 'set_value', value: 'fnlp/MOSS-TTSD-v0.5' },
+            { field: 'stream', action: 'set_value', value: false },
+            { field: 'speed', action: 'set_value', value: 1 },
+            { field: 'gain', action: 'set_value', value: 0 },
+            { field: 'voice', action: 'set_value', value: 'fishaudio/fish-speech-1.4:alex' },
+            { field: 'response_format', action: 'set_value', value: 'mp3' },
+            { field: '*', action: 'keep_only_fields', value: ['input', 'model', 'stream', 'speed', 'gain', 'voice', 'response_format'] }
+          ]
+        },
+        description: 'TTS-1模型请求体重构',
+        priority: 60
+      }
+    ];
+
+    let connection;
+    try {
+      connection = await pool.getConnection();
+      await connection.beginTransaction();
+
+      let importedCount = 0;
+      for (const rule of currentRules) {
+        // 检查是否已存在 - 使用描述作为唯一标识
+        const [existing] = await connection.query(
+          `SELECT id FROM system_configs
+           WHERE config_type = 'REQUEST_BODY_MODIFY' AND config_key = ?`,
+          [rule.description]
+        );
+
+        if (existing.length === 0) {
+          const configValue = {
+            rule_name: rule.description || rule.model_pattern,
+            model_pattern: rule.model_pattern,
+            condition_type: rule.modification_rules.conditions.length > 0 ? 'param_exists' : 'always',
+            condition_config: rule.modification_rules.conditions.length > 0 ?
+              { param: rule.modification_rules.conditions[0].field } : null,
+            action_type: rule.modification_rules.modifications.length === 1 &&
+                        rule.modification_rules.modifications[0].action === 'delete_field' ? 'delete_param' :
+                        rule.modification_rules.modifications.some(m => m.field === '*') ? 'replace_body' : 'set_param',
+            action_config: rule.modification_rules.modifications.length === 1 &&
+                          rule.modification_rules.modifications[0].action === 'delete_field' ?
+                          [rule.modification_rules.modifications[0].field] :
+                          rule.modification_rules.modifications.some(m => m.field === '*') ?
+                          rule.modification_rules.modifications.reduce((acc, m) => {
+                            if (m.field !== '*') acc[m.field] = m.value;
+                            return acc;
+                          }, {}) :
+                          rule.modification_rules.modifications.reduce((acc, m) => {
+                            acc[m.field] = m.value;
+                            return acc;
+                          }, {}),
+            description: rule.description,
+            priority: rule.priority
+          };
+
+          await connection.query(`
+            INSERT INTO system_configs
+            (config_type, config_key, config_value, is_active, created_by)
+            VALUES ('REQUEST_BODY_MODIFY', ?, ?, TRUE, 'SYSTEM')
+          `, [
+            rule.description || rule.model_pattern,
+            JSON.stringify(configValue)
+          ]);
+          importedCount++;
+        }
+      }
+
+      await connection.commit();
+
+      res.json({
+        message: `成功导入 ${importedCount} 条请求体修改规则`,
+        imported_count: importedCount,
+        total_rules: currentRules.length
+      });
+
+    } catch (error) {
+      if (connection) await connection.rollback();
+      throw error;
+    } finally {
+      if (connection) connection.release();
+    }
+
+  } catch (error) {
+    console.error('导入当前规则失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
 
 module.exports = router;

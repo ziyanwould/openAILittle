@@ -192,7 +192,7 @@ async function initializeDatabase() {
     await connection.query(`
       CREATE TABLE IF NOT EXISTS system_configs (
         id INT AUTO_INCREMENT PRIMARY KEY,
-        config_type ENUM('MODERATION', 'RATE_LIMIT', 'AUXILIARY_MODEL', 'CHATNIO_LIMIT') NOT NULL,
+        config_type ENUM('MODERATION', 'RATE_LIMIT', 'AUXILIARY_MODEL', 'CHATNIO_LIMIT', 'AUTOBAN', 'REQUEST_BODY_MODIFY') NOT NULL,
         config_key VARCHAR(255) NOT NULL COMMENT '配置键名，如模型名、路由名等',
         config_value JSON NOT NULL COMMENT '配置值，JSON格式存储',
         description TEXT COMMENT '配置描述',
@@ -211,8 +211,45 @@ async function initializeDatabase() {
     `);
     console.log('✓ system_configs 表初始化完成');
 
+    // ==================== 数据库兼容性更新 ====================
+    console.log('[4/6] 执行数据库兼容性更新');
+
+    // 更新 system_configs 表的 config_type ENUM 字段，添加新的类型
+    try {
+      // 检查当前 ENUM 值
+      const [enumInfo] = await connection.query(`
+        SELECT COLUMN_TYPE
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = '${dbConfig.database}'
+        AND TABLE_NAME = 'system_configs'
+        AND COLUMN_NAME = 'config_type'
+      `);
+
+      if (enumInfo.length > 0) {
+        const currentEnum = enumInfo[0].COLUMN_TYPE;
+
+        // 检查是否缺少新的枚举值
+        const needsUpdate = !currentEnum.includes('AUTOBAN') || !currentEnum.includes('REQUEST_BODY_MODIFY');
+
+        if (needsUpdate) {
+          await connection.query(`
+            ALTER TABLE system_configs
+            MODIFY COLUMN config_type
+            ENUM('MODERATION', 'RATE_LIMIT', 'AUXILIARY_MODEL', 'CHATNIO_LIMIT', 'AUTOBAN', 'REQUEST_BODY_MODIFY')
+            NOT NULL
+          `);
+          console.log('✓ system_configs.config_type ENUM 字段更新完成');
+        } else {
+          console.log('⭕ system_configs.config_type ENUM 字段已经是最新版本');
+        }
+      }
+    } catch (enumError) {
+      console.error('⚠️ system_configs.config_type ENUM 更新失败:', enumError.message);
+      // 不抛出错误，允许系统继续运行（新安装的数据库会有正确的ENUM值）
+    }
+
     // ==================== 创建索引 ====================
-    console.log('[4/5] 创建索引');
+    console.log('[5/6] 创建索引');
     const indexConfig = [
       { name: 'idx_requests_user', table: 'requests', columns: 'user_id' },
       { name: 'idx_requests_ip', table: 'requests', columns: 'ip' },
@@ -242,7 +279,7 @@ async function initializeDatabase() {
     }
 
     // ==================== 基础数据初始化 ====================
-    console.log('[5/5] 初始化基础数据');
+    console.log('[6/6] 初始化基础数据');
     await connection.query(
       `INSERT IGNORE INTO restricted_models (model_name) VALUES
       ('gpt-4'), ('dall-e-3'), ('text-moderation')`
@@ -1050,6 +1087,37 @@ async function initializeSystemConfigs() {
   }
 }
 
+// 获取请求体修改规则
+async function getRequestBodyModifyRules() {
+  try {
+    const [rules] = await pool.query(`
+      SELECT *
+      FROM system_configs
+      WHERE config_type = 'REQUEST_BODY_MODIFY'
+        AND is_active = TRUE
+      ORDER BY JSON_EXTRACT(config_value, '$.priority') ASC, id ASC
+    `);
+
+    return rules.map(rule => {
+      const config = JSON.parse(rule.config_value);
+      return {
+        id: rule.id,
+        rule_name: config.rule_name,
+        model_pattern: config.model_pattern,
+        condition_type: config.condition_type,
+        condition_config: config.condition_config,
+        action_type: config.action_type,
+        action_config: config.action_config,
+        priority: config.priority,
+        is_active: rule.is_active
+      };
+    });
+  } catch (error) {
+    console.error('获取请求体修改规则失败:', error);
+    throw error;
+  }
+}
+
 // 导出功能模块
 module.exports = {
   pool,
@@ -1072,5 +1140,7 @@ module.exports = {
   updateSystemConfig,
   deleteSystemConfig,
   resetSystemConfigsToDefaults,
-  initializeSystemConfigs
+  initializeSystemConfigs,
+  // 请求体修改规则
+  getRequestBodyModifyRules
 };
