@@ -162,12 +162,21 @@ function executeAction(req, rule) {
  */
 const modifyRequestBodyMiddleware = async (req, res, next) => {
   try {
-    // 只处理有 body 和 model 的请求
-    if (!req.body || !req.body.model) {
+    // 只处理有 body 的请求
+    if (!req.body) {
       return next();
     }
 
-    const model = req.body.model;
+    // 检查 model 字段，支持直接在 body 中或在 options 中
+    let model = req.body.model;
+    if (!model && req.body.options && req.body.options.model) {
+      model = req.body.options.model;
+    }
+
+    // 如果没有找到 model 字段，继续处理
+    if (!model) {
+      return next();
+    }
     const rules = await getRules();
 
     // 如果没有规则，直接继续

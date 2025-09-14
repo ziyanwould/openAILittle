@@ -1099,7 +1099,18 @@ async function getRequestBodyModifyRules() {
     `);
 
     return rules.map(rule => {
-      const config = JSON.parse(rule.config_value);
+      // 安全地解析配置，处理已经是对象的情况
+      let config;
+      try {
+        if (typeof rule.config_value === 'string') {
+          config = JSON.parse(rule.config_value || '{}');
+        } else {
+          config = rule.config_value || {};
+        }
+      } catch (error) {
+        console.error(`解析请求体修改规则配置失败 (ID: ${rule.id}):`, error.message);
+        config = {};
+      }
       return {
         id: rule.id,
         rule_name: config.rule_name,
