@@ -1156,20 +1156,194 @@ router.post('/stats/system-configs/reset/:configType', async (req, res) => {
 router.get('/stats/system-configs/statistics', async (req, res) => {
   try {
     const [stats] = await pool.query(`
-      SELECT 
+      SELECT
         config_type,
         COUNT(*) as total_count,
         SUM(CASE WHEN is_default = 1 THEN 1 ELSE 0 END) as default_count,
         SUM(CASE WHEN is_default = 0 THEN 1 ELSE 0 END) as custom_count,
         SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) as active_count
-      FROM system_configs 
+      FROM system_configs
       GROUP BY config_type
       ORDER BY config_type
     `);
-    
+
     res.json({ data: stats });
   } catch (error) {
     console.error('获取系统配置统计失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+// ==================== 自动禁封配置管理 API ====================
+
+// 获取自动禁封配置
+router.get('/stats/autoban-config', async (req, res) => {
+  try {
+    const [configs] = await pool.query(`
+      SELECT
+        config_key,
+        config_value,
+        description,
+        updated_at
+      FROM system_configs
+      WHERE config_type = 'AUTOBAN' AND is_active = TRUE
+      ORDER BY config_key
+    `);
+
+    // 转换为对象格式，方便前端使用
+    const configObj = {};
+    configs.forEach(config => {
+      let value = config.config_value;
+      // 尝试解析数字类型
+      if (!isNaN(value) && value !== '') {
+        value = Number(value);
+      }
+      configObj[config.config_key] = {
+        value: value,
+        description: config.description,
+        updated_at: config.updated_at
+      };
+    });
+
+    // 设置默认值（如果数据库中没有配置）
+    const defaultConfig = {
+      violation_threshold: {
+        value: configObj.violation_threshold?.value || 5,
+        description: configObj.violation_threshold?.description || '触发自动禁封的违规次数阈值',
+        updated_at: configObj.violation_threshold?.updated_at || null
+      },
+      ban_duration_hours: {
+        value: configObj.ban_duration_hours?.value || 24,
+        description: configObj.ban_duration_hours?.description || '自动禁封持续时长（小时）',
+        updated_at: configObj.ban_duration_hours?.updated_at || null
+      },
+      enabled: {
+        value: configObj.enabled?.value !== undefined ? (configObj.enabled.value === 'true' || configObj.enabled.value === true) : true,
+        description: configObj.enabled?.description || '是否启用自动禁封功能',
+        updated_at: configObj.enabled?.updated_at || null
+      }
+    };
+
+    res.json({
+      data: defaultConfig,
+      message: '获取自动禁封配置成功'
+    });
+  } catch (error) {
+    console.error('获取自动禁封配置失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+// 更新自动禁封配置
+router.put('/stats/autoban-config', async (req, res) => {
+  try {
+    const { violation_threshold, ban_duration_hours, enabled } = req.body;
+
+    // 参数验证
+    if (violation_threshold !== undefined && (violation_threshold < 1 || violation_threshold > 100)) {
+      return res.status(400).json({ error: '违规次数阈值必须在1-100之间' });
+    }
+
+    if (ban_duration_hours !== undefined && (ban_duration_hours < 1 || ban_duration_hours > 8760)) {
+      return res.status(400).json({ error: '禁封时长必须在1小时-1年之间' });
+    }
+
+    // 开始事务
+    let connection;
+    try {
+      connection = await pool.getConnection();
+      await connection.beginTransaction();
+
+      // 更新配置项
+      const updates = [
+        { key: 'violation_threshold', value: violation_threshold, description: '触发自动禁封的违规次数阈值' },
+        { key: 'ban_duration_hours', value: ban_duration_hours, description: '自动禁封持续时长（小时）' },
+        { key: 'enabled', value: enabled, description: '是否启用自动禁封功能' }
+      ];
+
+      for (const update of updates) {
+        if (update.value !== undefined) {
+          await connection.query(`
+            INSERT INTO system_configs (config_type, config_key, config_value, description, created_by, is_active)
+            VALUES ('AUTOBAN', ?, ?, ?, 'USER', TRUE)
+            ON DUPLICATE KEY UPDATE
+              config_value = VALUES(config_value),
+              description = VALUES(description),
+              updated_at = NOW()
+          `, [update.key, String(update.value), update.description]);
+        }
+      }
+
+      await connection.commit();
+
+      res.json({
+        message: '自动禁封配置更新成功',
+        data: {
+          violation_threshold,
+          ban_duration_hours,
+          enabled
+        }
+      });
+
+    } catch (error) {
+      if (connection) await connection.rollback();
+      throw error;
+    } finally {
+      if (connection) connection.release();
+    }
+
+  } catch (error) {
+    console.error('更新自动禁封配置失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+// 重置自动禁封配置为默认值
+router.post('/stats/autoban-config/reset', async (req, res) => {
+  try {
+    const defaultConfigs = [
+      { key: 'violation_threshold', value: '5', description: '触发自动禁封的违规次数阈值' },
+      { key: 'ban_duration_hours', value: '24', description: '自动禁封持续时长（小时）' },
+      { key: 'enabled', value: 'true', description: '是否启用自动禁封功能' }
+    ];
+
+    let connection;
+    try {
+      connection = await pool.getConnection();
+      await connection.beginTransaction();
+
+      for (const config of defaultConfigs) {
+        await connection.query(`
+          INSERT INTO system_configs (config_type, config_key, config_value, description, created_by, is_active, is_default)
+          VALUES ('AUTOBAN', ?, ?, ?, 'SYSTEM', TRUE, TRUE)
+          ON DUPLICATE KEY UPDATE
+            config_value = VALUES(config_value),
+            description = VALUES(description),
+            is_default = TRUE,
+            updated_at = NOW()
+        `, [config.key, config.value, config.description]);
+      }
+
+      await connection.commit();
+
+      res.json({
+        message: '自动禁封配置已重置为默认值',
+        data: {
+          violation_threshold: 5,
+          ban_duration_hours: 24,
+          enabled: true
+        }
+      });
+
+    } catch (error) {
+      if (connection) await connection.rollback();
+      throw error;
+    } finally {
+      if (connection) connection.release();
+    }
+
+  } catch (error) {
+    console.error('重置自动禁封配置失败:', error);
     res.status(500).json({ error: '服务器内部错误' });
   }
 });

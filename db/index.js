@@ -405,59 +405,131 @@ async function checkUserIpBanStatus(userId, ip) {
 }
 
 /**
+ * 获取自动禁封配置
+ */
+async function getAutoBanConfig() {
+  try {
+    const [configs] = await pool.query(`
+      SELECT config_key, config_value
+      FROM system_configs
+      WHERE config_type = 'AUTOBAN' AND is_active = TRUE
+    `);
+
+    const configObj = {};
+    configs.forEach(config => {
+      let value = config.config_value;
+      // 处理布尔值和数字类型转换
+      if (config.config_key === 'enabled') {
+        value = value === 'true' || value === true;
+      } else if (!isNaN(value) && value !== '') {
+        value = Number(value);
+      }
+      configObj[config.config_key] = value;
+    });
+
+    // 返回默认值（如果数据库中没有配置）
+    return {
+      violation_threshold: configObj.violation_threshold || 5,
+      ban_duration_hours: configObj.ban_duration_hours || 24,
+      enabled: configObj.enabled !== undefined ? configObj.enabled : true
+    };
+  } catch (error) {
+    console.error('获取自动禁封配置失败:', error);
+    // 返回默认值
+    return {
+      violation_threshold: 5,
+      ban_duration_hours: 24,
+      enabled: true
+    };
+  }
+}
+
+/**
  * 更新违规计数并自动标记
  */
 async function updateViolationCount(userId, ip, riskLevel) {
   if (riskLevel === 'PASS') return;
-  
+
   let connection;
   try {
     connection = await pool.getConnection();
     await connection.beginTransaction();
-    
+
+    // 获取自动禁封配置
+    const autoBanConfig = await getAutoBanConfig();
+
+    // 如果自动禁封功能被禁用，只更新违规计数，不执行禁封
+    if (!autoBanConfig.enabled) {
+      // 处理用户违规
+      if (userId) {
+        await connection.query(`
+          INSERT INTO user_ip_flags (user_id, flag_type, violation_count, first_violation_at, last_violation_at)
+          VALUES (?, 'USER', 1, NOW(), NOW())
+          ON DUPLICATE KEY UPDATE
+            violation_count = violation_count + 1,
+            last_violation_at = NOW()
+        `, [userId]);
+      }
+
+      // 处理IP违规
+      await connection.query(`
+        INSERT INTO user_ip_flags (ip, flag_type, violation_count, first_violation_at, last_violation_at)
+        VALUES (?, 'IP', 1, NOW(), NOW())
+        ON DUPLICATE KEY UPDATE
+          violation_count = violation_count + 1,
+          last_violation_at = NOW()
+      `, [ip]);
+
+      await connection.commit();
+      console.log(`[Violation Count] 违规计数已更新，但自动禁封功能已禁用`);
+      return;
+    }
+
     // 处理用户违规
     if (userId) {
       await connection.query(`
         INSERT INTO user_ip_flags (user_id, flag_type, violation_count, first_violation_at, last_violation_at)
         VALUES (?, 'USER', 1, NOW(), NOW())
-        ON DUPLICATE KEY UPDATE 
+        ON DUPLICATE KEY UPDATE
           violation_count = violation_count + 1,
           last_violation_at = NOW()
       `, [userId]);
     }
-    
+
     // 处理IP违规
     await connection.query(`
       INSERT INTO user_ip_flags (ip, flag_type, violation_count, first_violation_at, last_violation_at)
       VALUES (?, 'IP', 1, NOW(), NOW())
-      ON DUPLICATE KEY UPDATE 
+      ON DUPLICATE KEY UPDATE
         violation_count = violation_count + 1,
         last_violation_at = NOW()
     `, [ip]);
-    
-    // 检查是否需要自动禁用 (违规5次以上)
-    const autobanThreshold = 5;
+
+    // 使用配置化的阈值检查是否需要自动禁用
+    const autobanThreshold = autoBanConfig.violation_threshold;
+    const banDurationHours = autoBanConfig.ban_duration_hours;
+
     const [violations] = await connection.query(`
-      SELECT id, user_id, ip, violation_count, flag_type 
-      FROM user_ip_flags 
+      SELECT id, user_id, ip, violation_count, flag_type
+      FROM user_ip_flags
       WHERE ((user_id = ? AND flag_type = 'USER') OR (ip = ? AND flag_type = 'IP'))
-        AND violation_count >= ? 
+        AND violation_count >= ?
         AND is_banned = FALSE
     `, [userId, ip, autobanThreshold]);
-    
+
     for (const violation of violations) {
       await connection.query(`
-        UPDATE user_ip_flags 
-        SET is_banned = TRUE, 
-            ban_until = DATE_ADD(NOW(), INTERVAL 24 HOUR),
-            ban_reason = CONCAT('自动禁用：违规次数达到 ', violation_count, ' 次'),
+        UPDATE user_ip_flags
+        SET is_banned = TRUE,
+            ban_until = DATE_ADD(NOW(), INTERVAL ? HOUR),
+            ban_reason = CONCAT('自动禁用：违规次数达到 ', violation_count, ' 次（配置阈值: ', ?, '）'),
             updated_at = NOW()
         WHERE id = ?
-      `, [violation.id]);
-      
-      console.log(`[Auto Ban] ${violation.flag_type} ${violation.user_id || violation.ip} 因违规${violation.violation_count}次被自动禁用24小时`);
+      `, [banDurationHours, autobanThreshold, violation.id]);
+
+      console.log(`[Auto Ban] ${violation.flag_type} ${violation.user_id || violation.ip} 因违规${violation.violation_count}次被自动禁用${banDurationHours}小时 (阈值: ${autobanThreshold})`);
     }
-    
+
     await connection.commit();
   } catch (err) {
     if (connection) await connection.rollback();
@@ -987,6 +1059,7 @@ module.exports = {
   logModerationResult,
   checkUserIpBanStatus,
   updateViolationCount,
+  getAutoBanConfig,
   manageUserIpBan,
   getAllConfigRules,
   addConfigRule,
