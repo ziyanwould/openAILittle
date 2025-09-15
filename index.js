@@ -47,20 +47,24 @@ require('dotenv').config();
 // 统一管理提示信息
 const UPGRADE_MESSAGE = process.env.UPGRADE_MESSAGE || '';
 
-// 解析 FREELYAI_WHITELIST 环境变量，支持等号分割取左边
-let freelyaiModelWhitelist = [];
-if (process.env.FREELYAI_WHITELIST) {
-  freelyaiModelWhitelist = process.env.FREELYAI_WHITELIST.split(',')
-    .map(item => item.split('=')[0].trim())
-    .filter(Boolean);
-}
-
-// 解析 ROBOT_WHITELIST 环境变量，支持等号分割取左边
+// 模型白名单（从数据库加载，文件为默认回退）
 let robotModelWhitelist = [];
-if (process.env.ROBOT_WHITELIST) {
-  robotModelWhitelist = process.env.ROBOT_WHITELIST.split(',')
-    .map(item => item.split('=')[0].trim())
-    .filter(Boolean);
+let freelyaiModelWhitelist = [];
+let lastModelWhitelistLoad = 0;
+const MODEL_WL_TTL_MS = 60 * 1000; // 60秒刷新一次
+const { getModelWhitelists } = require('./db');
+
+async function loadModelWhitelists(force = false) {
+  const now = Date.now();
+  if (!force && (now - lastModelWhitelistLoad) < MODEL_WL_TTL_MS && robotModelWhitelist.length && freelyaiModelWhitelist.length) return;
+  try {
+    const data = await getModelWhitelists();
+    robotModelWhitelist = Array.isArray(data?.ROBOT) ? data.ROBOT : [];
+    freelyaiModelWhitelist = Array.isArray(data?.FREELYAI) ? data.FREELYAI : [];
+    lastModelWhitelistLoad = now;
+  } catch (e) {
+    console.error('加载模型白名单失败:', e.message);
+  }
 }
 
 // Node.js 18 以上版本支持原生的 fetch API
@@ -365,6 +369,17 @@ app.get('/internal/cache/refresh-concise', async (req, res) => {
     conciseModeCache = null;
     lastConciseModeLoad = 0;
     res.json({ success: true, message: 'concise cache cleared' });
+  } catch (e) {
+    res.status(500).json({ success: false });
+  }
+});
+
+// 内部接口：刷新模型白名单缓存
+app.get('/internal/cache/refresh-model-whitelists', async (req, res) => {
+  try {
+    lastModelWhitelistLoad = 0;
+    await loadModelWhitelists(true);
+    res.json({ success: true, message: 'model whitelists cache refreshed' });
   } catch (e) {
     res.status(500).json({ success: false });
   }
@@ -807,6 +822,8 @@ app.use('/freelyai', (req, res, next) => {
   const method = req.method.toUpperCase();
   if (["POST", "PUT", "PATCH"].includes(method)) {
     const modelName = req.body && req.body.model;
+    // 刷新模型白名单（异步，不阻塞）
+    loadModelWhitelists().catch(()=>{});
     if (!modelName || !freelyaiModelWhitelist.includes(modelName)) {
       return res.status(403).json({ error: '禁止请求该模型，未在白名单内。' });
     }
@@ -1392,6 +1409,7 @@ app.use('/v1', (req, res, next) => {
   const method = req.method.toUpperCase();
   if (["POST", "PUT", "PATCH"].includes(method)) {
     const modelName = req.body && req.body.model;
+    loadModelWhitelists().catch(()=>{});
     if (!modelName || !robotModelWhitelist.includes(modelName)) {
       return res.status(403).json({ error: '禁止请求该模型，未在ROBOT_WHITELIST白名单内。' });
     }
@@ -1545,6 +1563,7 @@ app.listen(PORT, async () => {
     await configManager.initialize();
     await loadAllConfigFromManager();
     await loadWhitelistFromConfigManager();
+    await loadModelWhitelists(true);
     console.log('配置管理器初始化完成 - Config Manager模式');
     
     // 初始化系统配置（从文件加载到数据库）

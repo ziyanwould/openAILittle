@@ -12,6 +12,7 @@ const {
   getConciseModeConfig,
   setConciseModeConfig
 } = require('../db');
+const { getModelWhitelists, setModelWhitelist, resetModelWhitelists } = require('../db');
 
 // 基础查询构建器 (添加分页参数)
 function buildFilterQuery(params, forCount = false) {
@@ -2222,6 +2223,60 @@ router.put('/stats/concise-mode-config', async (req, res) => {
     res.json({ success: true, message: `简洁转发模式已${enabled ? '启用' : '禁用'}`, data: { enabled, tail_len: tail } });
   } catch (error) {
     console.error('更新简洁转发配置失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+// ==================== 模型白名单配置 API ====================
+
+// 获取模型白名单
+router.get('/stats/model-whitelists', async (req, res) => {
+  try {
+    const data = await getModelWhitelists();
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('获取模型白名单失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+// 更新指定白名单（ROBOT/FREELYAI）
+router.put('/stats/model-whitelists/:key', async (req, res) => {
+  try {
+    const key = (req.params.key || '').toUpperCase();
+    if (!['ROBOT', 'FREELYAI'].includes(key)) {
+      return res.status(400).json({ error: 'key 必须是 ROBOT 或 FREELYAI' });
+    }
+    let { models } = req.body || {};
+    if (!Array.isArray(models)) return res.status(400).json({ error: 'models 必须为字符串数组' });
+    models = models.map(s => String(s).split('=')[0].trim()).filter(Boolean);
+    const ok = await setModelWhitelist(key, models);
+    if (!ok) return res.status(500).json({ error: '保存失败' });
+
+    // 通知主服务刷新缓存
+    const mainPort = process.env.MAIN_PORT || 20491;
+    try { await fetch(`http://localhost:${mainPort}/internal/cache/refresh-model-whitelists`).catch(()=>{}); } catch (_) {}
+
+    res.json({ success: true, data: { key, models } });
+  } catch (error) {
+    console.error('更新模型白名单失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+// 重置为默认配置文件中的白名单
+router.post('/stats/model-whitelists/reset', async (req, res) => {
+  try {
+    const ok = await resetModelWhitelists();
+    if (!ok) return res.status(500).json({ error: '重置失败' });
+
+    // 通知主服务刷新缓存
+    const mainPort = process.env.MAIN_PORT || 20491;
+    try { await fetch(`http://localhost:${mainPort}/internal/cache/refresh-model-whitelists`).catch(()=>{}); } catch (_) {}
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('重置模型白名单失败:', error);
     res.status(500).json({ error: '服务器内部错误' });
   }
 });

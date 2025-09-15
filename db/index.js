@@ -229,13 +229,13 @@ async function initializeDatabase() {
         const currentEnum = enumInfo[0].COLUMN_TYPE;
 
         // 检查是否缺少新的枚举值
-        const needsUpdate = !currentEnum.includes('AUTOBAN') || !currentEnum.includes('REQUEST_BODY_MODIFY') || !currentEnum.includes('NOTIFICATION');
+        const needsUpdate = !currentEnum.includes('AUTOBAN') || !currentEnum.includes('REQUEST_BODY_MODIFY') || !currentEnum.includes('NOTIFICATION') || !currentEnum.includes('MODEL_WHITELIST');
 
         if (needsUpdate) {
           await connection.query(`
             ALTER TABLE system_configs
             MODIFY COLUMN config_type
-            ENUM('MODERATION', 'RATE_LIMIT', 'AUXILIARY_MODEL', 'CHATNIO_LIMIT', 'AUTOBAN', 'REQUEST_BODY_MODIFY', 'NOTIFICATION')
+            ENUM('MODERATION', 'RATE_LIMIT', 'AUXILIARY_MODEL', 'CHATNIO_LIMIT', 'AUTOBAN', 'REQUEST_BODY_MODIFY', 'NOTIFICATION', 'MODEL_WHITELIST')
             NOT NULL
           `);
           console.log('✓ system_configs.config_type ENUM 字段更新完成');
@@ -1197,6 +1197,103 @@ module.exports = {
   getRequestBodyModifyRules,
   // 通知配置管理
   getNotificationConfigs,
+  // 模型白名单配置
+  getModelWhitelists: async function() {
+    try {
+      const [rows] = await pool.query(
+        "SELECT config_key, config_value FROM system_configs WHERE config_type = 'MODEL_WHITELIST'"
+      );
+
+      const result = { FREELYAI: [], ROBOT: [] };
+      for (const row of rows) {
+        let val = row.config_value;
+        let models = [];
+        try {
+          if (typeof val === 'string') {
+            try {
+              const parsed = JSON.parse(val);
+              if (parsed && Array.isArray(parsed.models)) models = parsed.models;
+              else if (Array.isArray(parsed)) models = parsed;
+              else models = String(val).split(',').map(s => s.split('=')[0].trim()).filter(Boolean);
+            } catch {
+              models = String(val).split(',').map(s => s.split('=')[0].trim()).filter(Boolean);
+            }
+          } else if (val && typeof val === 'object') {
+            if (Array.isArray(val.models)) models = val.models;
+          }
+        } catch {}
+        if (row.config_key === 'FREELYAI') result.FREELYAI = models;
+        if (row.config_key === 'ROBOT') result.ROBOT = models;
+      }
+
+      // 文件默认回填（当DB缺失时）
+      if (result.FREELYAI.length === 0 || result.ROBOT.length === 0) {
+        try {
+          const fs = require('fs');
+          const path = require('path');
+          const filePath = path.join(process.cwd(), 'config', 'modelWhitelists.json');
+          if (fs.existsSync(filePath)) {
+            const json = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+            if (result.FREELYAI.length === 0 && Array.isArray(json?.defaults?.FREELYAI)) {
+              result.FREELYAI = json.defaults.FREELYAI;
+            }
+            if (result.ROBOT.length === 0 && Array.isArray(json?.defaults?.ROBOT)) {
+              result.ROBOT = json.defaults.ROBOT;
+            }
+          }
+        } catch {}
+      }
+      return result;
+    } catch (e) {
+      console.error('获取模型白名单失败:', e.message);
+      return { FREELYAI: [], ROBOT: [] };
+    }
+  },
+  setModelWhitelist: async function(key, models) {
+    try {
+      const configKey = key === 'ROBOT' ? 'ROBOT' : 'FREELYAI';
+      const value = JSON.stringify({ models: (models || []).map(s => String(s).split('=')[0].trim()).filter(Boolean) });
+      const [existing] = await pool.query(
+        "SELECT id FROM system_configs WHERE config_type='MODEL_WHITELIST' AND config_key = ? LIMIT 1",
+        [configKey]
+      );
+      if (existing.length > 0) {
+        await pool.query(
+          "UPDATE system_configs SET config_value = ?, updated_at = NOW() WHERE id = ?",
+          [value, existing[0].id]
+        );
+      } else {
+        await pool.query(
+          "INSERT INTO system_configs (config_type, config_key, config_value, description, is_active, is_default, priority, created_by, created_at, updated_at) VALUES ('MODEL_WHITELIST', ?, ?, '模型白名单', TRUE, FALSE, 50, 'SYSTEM', NOW(), NOW())",
+          [configKey, value]
+        );
+      }
+      return true;
+    } catch (e) {
+      console.error('更新模型白名单失败:', e.message);
+      return false;
+    }
+  },
+  resetModelWhitelists: async function() {
+    try {
+      const fs = require('fs');
+      const path = require('path');
+      const filePath = path.join(process.cwd(), 'config', 'modelWhitelists.json');
+      if (!fs.existsSync(filePath)) return false;
+      const json = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      const defaults = json?.defaults || {};
+      if (Array.isArray(defaults.FREELYAI)) {
+        await this.setModelWhitelist('FREELYAI', defaults.FREELYAI);
+      }
+      if (Array.isArray(defaults.ROBOT)) {
+        await this.setModelWhitelist('ROBOT', defaults.ROBOT);
+      }
+      return true;
+    } catch (e) {
+      console.error('重置模型白名单失败:', e.message);
+      return false;
+    }
+  },
   // 简洁转发模式配置
   getConciseModeConfig: async function() {
     try {

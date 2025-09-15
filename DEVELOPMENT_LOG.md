@@ -1,7 +1,7 @@
 # OpenAI Little - 开发记录文档
 
 > **更新时间**: 2025-09-15
-> **版本**: 1.7.2 (简洁转发功能修复与完善)
+> **版本**: 1.8.0 (模型白名单可视化管理 + DB 驱动)
 > **作者**: Liu Jiarong  
 
 ## 🏗️ 项目架构概览
@@ -314,6 +314,57 @@ grep "Content Moderation" logs/app.log  # 过滤审查日志
 - `4291-4299` - 各种限流策略触发
 
 ## 🆕 更新日志
+
+### 2025-09-15 - v1.8.0 模型白名单可视化管理 + DB 驱动
+
+#### 🎯 目标
+- 将 `.env` 中冗长且难维护的模型白名单（`FREELYAI_WHITELIST`、`ROBOT_WHITELIST`）迁移为“数据库驱动 + 前端可视化管理”。
+- 支持一键“重置为默认（文件）”，并确保后端校验以数据库为准、即时生效且兼容生产。
+
+#### 🔧 后端改造
+**配置与数据库**
+- 新增配置文件：`config/modelWhitelists.json`
+  - `defaults.FREELYAI`、`defaults.ROBOT` 保存原始默认白名单（源自 `.env` 现有值）。
+- 扩展 DB ENUM：`system_configs.config_type` 新增 `MODEL_WHITELIST`（兼容更新，生产无中断）。
+- 新增 DB 方法（`db/index.js`）：
+  - `getModelWhitelists()`：读取 DB 中的 `FREELYAI`、`ROBOT`；如缺失回退文件默认。
+  - `setModelWhitelist(key, models)`：Upsert JSON `{ models: [...] }`。
+  - `resetModelWhitelists()`：用文件默认回填 DB。
+  - 兼容解析：字符串/JSON/数组均可，逗号分隔时自动取等号左侧模型名。
+
+**服务端校验切换为 DB 驱动**
+- `index.js`：
+  - 移除 `.env` 对 `FREELYAI_WHITELIST`、`ROBOT_WHITELIST` 的解析与依赖。
+  - 新增白名单缓存与加载：`getModelWhitelists()` → `robotModelWhitelist`、`freelyaiModelWhitelist`，TTL 60 秒；启动时强制加载。
+  - 校验点：
+    - `/v1` 路由使用 `robotModelWhitelist`（模型白名单校验）。
+    - `/freelyai` 路由使用 `freelyaiModelWhitelist`。
+  - 内部刷新端点：`GET /internal/cache/refresh-model-whitelists`（更新后即时刷新缓存）。
+
+**API（`router/statsRoutes.js`）**
+- `GET /api/stats/model-whitelists` → 返回 `{ FREELYAI, ROBOT }`。
+- `PUT /api/stats/model-whitelists/:key` → 更新指定白名单（`ROBOT`/`FREELYAI`），body: `{ models: string[] }`。
+- `POST /api/stats/model-whitelists/reset` → 从 `config/modelWhitelists.json` 恢复默认值写入 DB。
+- 更新/重置后，主动调用主服务内部端点刷新缓存（即时生效）。
+
+#### 🎨 前端管理（openailittle-frontend）
+- `ModerationManagement.vue` 新增标签页“模型白名单”：
+  - 两列管理：`ROBOT`（/v1 路由）、`FREELYAI`（/freelyai 路由）。
+  - 支持标签可视化增删、输入新增、保存、重置为默认。
+  - 进入标签页自动加载当前 DB 白名单；保存/重置后即时生效。
+- `src/api/index.js` 新增接口：
+  - `getModelWhitelists()`、`updateModelWhitelist(key, models)`、`resetModelWhitelists()`。
+
+#### 🧩 兼容与迁移说明
+- 校验以数据库为准；DB 缺失时回退文件默认值。
+- `.env` 中 `FREELYAI_WHITELIST`、`ROBOT_WHITELIST` 不再作为运行时来源，建议移除或忽略（保留不影响）。
+- 数据库 ENUM 扩展通过兼容写法执行；失败不阻断服务（新装库本身即包含完整 ENUM）。
+
+#### ✅ 验证
+- 前端新增/删除模型并保存，立即影响 `/v1` 或 `/freelyai` 路由的访问校验。
+- 点击“重置为默认”，DB 恢复为 `config/modelWhitelists.json` 的默认集合且立即生效。
+
+---
 
 ### 2025-09-15 - v1.7.1 预设通知规则配置文件化管理
 
