@@ -860,7 +860,8 @@ const freelyaiProxy = createProxyMiddleware({
     },
   },
 });
-app.use('/freelyai', freelyaiProxy, contentModerationMiddleware);
+// 对 FreelyAI 路由：先审核再转发
+app.use('/freelyai', contentModerationMiddleware, freelyaiProxy);
 
 //  googleProxy 中间件添加限流
 const googleRateLimiter = rateLimit({
@@ -1095,7 +1096,8 @@ app.use(responseInterceptorMiddleware); // 响应拦截中间件，用于记录A
 // 内容审核中间件已移至校验链末尾
 
 // 应用 /free/gemini 代理中间件
-app.use('/freegemini', freeGeminiProxy, contentModerationMiddleware);
+// 将内容审核置于代理之前，避免响应已结束导致审核不生效
+app.use('/freegemini', contentModerationMiddleware, freeGeminiProxy);
 
 // 应用 googleRateLimiter 到 googleProxy
 app.use('/google', defaultLengthLimiter, googleRateLimiter, googleProxy, contentModerationMiddleware);
@@ -1104,7 +1106,8 @@ app.use('/google', defaultLengthLimiter, googleRateLimiter, googleProxy, content
 app.use(modifyRequestBodyMiddleware);
 
 // 应用 /free/openai 代理中间件
-app.use('/freeopenai', freeOpenAIProxy, contentModerationMiddleware);
+// 对 Free OpenAI 路由：先审核再转发
+app.use('/freeopenai', contentModerationMiddleware, freeOpenAIProxy);
 
 // 中间件函数，用于检查敏感词和黑名单用户
 app.use('/', (req, res, next) => {
