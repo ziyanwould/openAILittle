@@ -1196,5 +1196,94 @@ module.exports = {
   // 请求体修改规则
   getRequestBodyModifyRules,
   // 通知配置管理
-  getNotificationConfigs
+  getNotificationConfigs,
+  // 简洁转发模式配置
+  getConciseModeConfig: async function() {
+    try {
+      const [rows] = await pool.query(
+        "SELECT config_value, updated_at FROM system_configs WHERE config_key = 'concise_mode' AND config_type = 'NOTIFICATION' LIMIT 1"
+      );
+      let enabled = false;
+      let tail_len = 100;
+      let updated_at = null;
+      if (rows.length > 0) {
+        updated_at = rows[0].updated_at || null;
+        let raw = rows[0].config_value;
+        try {
+          // 兼容旧数据：可能是字符串、JSON字符串、布尔或数字
+          if (typeof raw === 'string') {
+            // 可能是 JSON 字符串或 'true'/'false'
+            try {
+              const parsed = JSON.parse(raw);
+              if (parsed && typeof parsed === 'object') {
+                if (typeof parsed.enabled === 'boolean') enabled = parsed.enabled;
+                if (!isNaN(parsed.tail_len)) tail_len = Math.max(1, parseInt(parsed.tail_len, 10));
+              } else if (typeof parsed === 'boolean') {
+                enabled = parsed;
+              } else if (!isNaN(parsed)) {
+                tail_len = Math.max(1, parseInt(parsed, 10));
+              }
+            } catch (_) {
+              const lowered = raw.trim().toLowerCase();
+              if (lowered === 'true' || lowered === 'false') {
+                enabled = lowered === 'true';
+              } else if (!isNaN(raw)) {
+                tail_len = Math.max(1, parseInt(raw, 10));
+              }
+            }
+          } else if (raw && typeof raw === 'object') {
+            if (typeof raw.enabled === 'boolean') enabled = raw.enabled;
+            if (!isNaN(raw.tail_len)) tail_len = Math.max(1, parseInt(raw.tail_len, 10));
+          } else if (typeof raw === 'boolean') {
+            enabled = raw;
+          } else if (!isNaN(raw)) {
+            tail_len = Math.max(1, parseInt(raw, 10));
+          }
+        } catch (e) {
+          // 解析错误时使用默认值
+        }
+      }
+      return { enabled, tail_len, updated_at };
+    } catch (error) {
+      console.error('获取简洁转发模式失败:', error.message);
+      return { enabled: false, tail_len: 100, updated_at: null };
+    }
+  },
+  getConciseModeUpdatedAt: async function() {
+    try {
+      const [rows] = await pool.query(
+        "SELECT updated_at FROM system_configs WHERE config_key = 'concise_mode' AND config_type = 'NOTIFICATION' LIMIT 1"
+      );
+      return rows.length > 0 ? rows[0].updated_at : null;
+    } catch (e) {
+      return null;
+    }
+  },
+  setConciseModeConfig: async function({ enabled, tail_len }) {
+    try {
+      const normalized = {
+        enabled: Boolean(enabled),
+        tail_len: Math.max(1, parseInt(tail_len || 100, 10))
+      };
+      const configValue = JSON.stringify(normalized);
+      const [existing] = await pool.query(
+        "SELECT id FROM system_configs WHERE config_key = 'concise_mode' AND config_type = 'NOTIFICATION' LIMIT 1"
+      );
+      if (existing.length > 0) {
+        await pool.query(
+          "UPDATE system_configs SET config_value = ?, updated_at = NOW() WHERE id = ?",
+          [configValue, existing[0].id]
+        );
+      } else {
+        await pool.query(
+          "INSERT INTO system_configs (config_type, config_key, config_value, description, is_active, is_default, priority, created_by, created_at, updated_at) VALUES ('NOTIFICATION','concise_mode', ?, '简洁转发模式配置', TRUE, FALSE, 1000, 'SYSTEM', NOW(), NOW())",
+          [configValue]
+        );
+      }
+      return true;
+    } catch (error) {
+      console.error('更新简洁转发模式失败:', error.message);
+      return false;
+    }
+  }
 };

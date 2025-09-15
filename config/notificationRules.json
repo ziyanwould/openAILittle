@@ -5,7 +5,7 @@
       "name": "Robot PushDeer",
       "topic": "robot",
       "type": "pushdeer",
-      "enabled": false,
+      "enabled": true,
       "readonly": true,
       "config": {
         "pushkey": "PDU33066TepraNW9hJp3GP5NWPCVgVaGpoxtU3EMa"

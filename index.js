@@ -37,7 +37,7 @@ const limitRequestBodyLength = require('./middleware/limitRequestBodyLength'); /
 const loggingMiddleware = require('./middleware/loggingMiddleware'); // 引入日志中间件
 const contentModerationMiddleware = require('./middleware/contentModerationMiddleware'); // 引入内容审查中间件
 const configManager = require('./middleware/configManager'); // 引入配置管理器
-const { initializeSystemConfigs, getNotificationConfigs } = require('./db'); // 引入系统配置初始化
+const { initializeSystemConfigs, getNotificationConfigs, pool, getConciseModeConfig, getConciseModeUpdatedAt } = require('./db'); // 引入系统配置初始化与数据库连接池
 
 const chatnioRateLimiters = {}; // 用于存储 chatnio 的限流器
 // 在文件开头引入 dotenv
@@ -77,6 +77,82 @@ auxiliaryModels.forEach(model => {
 
 // 创建一个对象来存储每个模型每天的请求计数
 const dailyRequestCounts = {};
+
+// ==================== 通知内容提取与简洁处理工具 ====================
+function safeJsonParse(str) {
+  if (typeof str !== 'string') return null;
+  try { return JSON.parse(str); } catch (_) { return null; }
+}
+
+function getLastUserTextFromMessages(messages) {
+  if (!Array.isArray(messages)) return null;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (!m) continue;
+    const role = m.role || m.author || m.sender; // 兼容字段
+    if (role && String(role).toLowerCase() !== 'user') continue;
+    const c = m.content;
+    if (typeof c === 'string') return c;
+    // OpenAI 新格式: content 为数组
+    if (Array.isArray(c)) {
+      for (let j = c.length - 1; j >= 0; j--) {
+        const part = c[j];
+        if (!part) continue;
+        if (typeof part === 'string') return part;
+        if (typeof part.text === 'string') return part.text;
+        if (part.type === 'text' && typeof part.text === 'string') return part.text;
+      }
+    }
+    // 某些平台将消息放在 message 或 value 字段
+    if (typeof m.message === 'string') return m.message;
+    if (typeof m.value === 'string') return m.value;
+  }
+  return null;
+}
+
+function getLastUserTextFromContents(contents) {
+  // Gemini: contents: [{ role: 'user'|'model', parts: [{text: '...'}, ...] }, ...]
+  if (!Array.isArray(contents)) return null;
+  for (let i = contents.length - 1; i >= 0; i--) {
+    const c = contents[i];
+    if (!c) continue;
+    const role = c.role || c.author;
+    if (role && String(role).toLowerCase() !== 'user') continue;
+    const parts = c.parts;
+    if (Array.isArray(parts)) {
+      for (let j = parts.length - 1; j >= 0; j--) {
+        const p = parts[j];
+        if (!p) continue;
+        if (typeof p === 'string') return p;
+        if (typeof p.text === 'string') return p.text;
+        if (p.type === 'text' && typeof p.text === 'string') return p.text;
+      }
+    }
+  }
+  return null;
+}
+
+function extractLastUserTextFromBodyStr(bodyStr) {
+  const obj = safeJsonParse(bodyStr);
+  if (!obj || typeof obj !== 'object') return null;
+
+  // OpenAI/通用聊天
+  if (obj.messages) {
+    const text = getLastUserTextFromMessages(obj.messages);
+    if (text) return text;
+  }
+  // Gemini
+  if (obj.contents) {
+    const text = getLastUserTextFromContents(obj.contents);
+    if (text) return text;
+  }
+  // 纯文本输入
+  if (typeof obj.input === 'string') return obj.input;
+  if (typeof obj.prompt === 'string') return obj.prompt;
+  if (typeof obj.text === 'string') return obj.text;
+
+  return null;
+}
 
 // 创建一个缓存来存储最近的请求内容
 const recentRequestsCache = new Map();
@@ -176,10 +252,33 @@ async function loadNotificationConfigs() {
   }
 }
 
+// 简洁模式缓存
+let conciseModeCache = null;
+let lastConciseModeLoad = 0;
+const CONCISE_CACHE_TTL_MS = 5 * 60 * 1000; // 5分钟兜底
+const CONCISE_REFRESH_INTERVAL_MS = 3000;   // 每3秒主动拉取一次配置，确保迅速生效
+
 // 新的数据库驱动通知函数
 async function notices(data, requestBody, ntfyTopic = 'robot') {
   try {
     const configs = await loadNotificationConfigs();
+
+    // 获取简洁转发模式配置（带缓存）
+    const now = Date.now();
+    // 每3秒直接拉取一次配置（覆盖本地缓存），另外保留5分钟兜底
+    if (!conciseModeCache || (now - lastConciseModeLoad) > CONCISE_REFRESH_INTERVAL_MS || (now - lastConciseModeLoad) > CONCISE_CACHE_TTL_MS) {
+      try {
+        const cfg = await getConciseModeConfig();
+        conciseModeCache = cfg;
+        lastConciseModeLoad = now;
+      } catch (error) {
+        console.error('[通知] 获取简洁模式配置失败:', error.message);
+        conciseModeCache = { enabled: false, tail_len: 100 };
+        lastConciseModeLoad = now;
+      }
+    }
+    const conciseModeEnabled = !!(conciseModeCache && conciseModeCache.enabled);
+    const tailLen = Math.max(1, parseInt((conciseModeCache && conciseModeCache.tail_len) || 100, 10));
 
     // 过滤启用的通知配置，支持主题匹配
     const activeConfigs = configs.filter(config =>
@@ -193,8 +292,27 @@ async function notices(data, requestBody, ntfyTopic = 'robot') {
       return;
     }
 
+    // 根据简洁模式配置处理请求内容（按"最新一条用户消息"的最后100字裁剪）
+    let processedRequestBody = requestBody;
+    if (conciseModeEnabled && requestBody) {
+      let lastUserText = extractLastUserTextFromBodyStr(requestBody);
+      if (typeof lastUserText === 'string' && lastUserText.length > 0) {
+        // 简洁模式启用时，始终优先使用提取的用户消息（简洁转发的核心目的）
+        if (lastUserText.length > tailLen) {
+          processedRequestBody = '...' + lastUserText.slice(-tailLen);
+          console.log(`[通知] 简洁模式：用户消息截取至最后${tailLen}字符`);
+        } else {
+          processedRequestBody = lastUserText;
+          console.log(`[通知] 简洁模式：显示完整用户消息（${lastUserText.length}字符）`);
+        }
+      } else if (requestBody.length > tailLen) {
+        processedRequestBody = '...' + requestBody.slice(-tailLen);
+        console.log(`[通知] 简洁模式：提取失败，退回整体内容的最后${tailLen}字符`);
+      }
+    }
+
     // 构建通知消息内容
-    const message = `模型：${data.modelName}\nIP 地址：${data.ip}\n用户 ID：${data.userId}\n时间：${data.time}\n用户请求内容：\n${requestBody}`;
+    const message = `模型：${data.modelName}\nIP 地址：${data.ip}\n用户 ID：${data.userId}\n时间：${data.time}\n用户请求内容：\n${processedRequestBody}`;
 
     // 并发发送所有启用的通知
     const notifications = activeConfigs.map(async (config) => {
@@ -204,13 +322,13 @@ async function notices(data, requestBody, ntfyTopic = 'robot') {
         switch (notification_type) {
           case 'pushdeer':
             if (api_key) {
-              await sendNotification(data, requestBody, api_key);
+              await sendNotification(data, processedRequestBody, api_key);
               console.log(`[通知] PushDeer 通知发送成功 (${config.config_key})`);
             }
             break;
           case 'lark':
             if (webhook_url) {
-              await sendLarkNotification(data, requestBody, webhook_url);
+              await sendLarkNotification(data, processedRequestBody, webhook_url);
               console.log(`[通知] Lark 通知发送成功 (${config.config_key})`);
             }
             break;
@@ -222,7 +340,7 @@ async function notices(data, requestBody, ntfyTopic = 'robot') {
             break;
           case 'ntfy':
             if (topic && api_key) {
-              await sendNTFYNotification(data, requestBody, topic, api_key);
+              await sendNTFYNotification(data, processedRequestBody, topic, api_key);
               console.log(`[通知] Ntfy 通知发送成功 (${config.config_key})`);
             }
             break;
@@ -239,6 +357,17 @@ async function notices(data, requestBody, ntfyTopic = 'robot') {
     console.error('[通知] 系统发送失败:', error.message);
   }
 }
+
+// 内部接口：刷新简洁模式缓存（供统计服务调用以立即生效）
+app.get('/internal/cache/refresh-concise', async (req, res) => {
+  try {
+    conciseModeCache = null;
+    lastConciseModeLoad = 0;
+    res.json({ success: true, message: 'concise cache cleared' });
+  } catch (e) {
+    res.status(500).json({ success: false });
+  }
+});
 
 // 定义敏感词和黑名单文件路径（保留兼容性）
 const sensitiveWordsFilePath = 'config/Sensitive.txt'; // 可以是 .txt 或 .json

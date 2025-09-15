@@ -8,7 +8,9 @@ const {
   updateSystemConfig,
   deleteSystemConfig,
   resetSystemConfigsToDefaults,
-  getNotificationConfigs
+  getNotificationConfigs,
+  getConciseModeConfig,
+  setConciseModeConfig
 } = require('../db');
 
 // 基础查询构建器 (添加分页参数)
@@ -1835,16 +1837,20 @@ router.get('/stats/notification-configs', async (req, res) => {
       config_value: {
         notification_type: rule.type,
         enabled: rule.enabled,
-        webhook_url: rule.config.webhook_url,
-        api_key: rule.config.pushkey || rule.config.api_key
+        // 对于Lark类型，需要组合基础URL和UUID用于显示
+        webhook_url: rule.type === 'lark' && rule.config.webhook_url
+          ? process.env.TARGET_SERVER_FEISHU + rule.config.webhook_url
+          : rule.config.webhook_url,
+        api_key: rule.config.pushkey || rule.config.api_key,
+        topic: rule.config.topic
       },
       description: rule.name,
       is_active: rule.enabled,
-      priority: rule.priority || 1000,
+      priority: rule.priority || 1,  // 预设规则优先级设为1，比数据库配置更高
       created_by: 'SYSTEM',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
-      readonly: rule.readonly || false
+      readonly: true  // 所有预设规则都是只读的
     }));
 
     // 过滤预设规则（如果有搜索条件）
@@ -2088,31 +2094,52 @@ router.delete('/stats/notification-configs/:id', async (req, res) => {
 // 测试通知配置
 router.post('/stats/notification-configs/:id/test', async (req, res) => {
   try {
-    const id = parseInt(req.params.id);
-    if (!id || id <= 0) {
-      return res.status(400).json({ error: '无效的配置ID' });
-    }
-
-    // 获取配置
-    const [configs] = await pool.query(
-      'SELECT config_key, config_value FROM system_configs WHERE id = ? AND config_type = "NOTIFICATION"',
-      [id]
-    );
-
-    if (configs.length === 0) {
-      return res.status(404).json({ error: '通知配置不存在' });
-    }
-
-    const config = configs[0];
+    const id = req.params.id;
     let configValue;
-    try {
-      if (typeof config.config_value === 'string') {
-        configValue = JSON.parse(config.config_value || '{}');
-      } else {
-        configValue = config.config_value || {};
+    let config_key;
+
+    // 首先尝试从数据库获取
+    if (!isNaN(parseInt(id))) {
+      const [configs] = await pool.query(
+        'SELECT config_key, config_value FROM system_configs WHERE id = ? AND config_type = "NOTIFICATION"',
+        [parseInt(id)]
+      );
+
+      if (configs.length > 0) {
+        const config = configs[0];
+        config_key = config.config_key;
+        try {
+          if (typeof config.config_value === 'string') {
+            configValue = JSON.parse(config.config_value || '{}');
+          } else {
+            configValue = config.config_value || {};
+          }
+        } catch (error) {
+          return res.status(400).json({ error: '配置格式错误' });
+        }
       }
-    } catch (error) {
-      return res.status(400).json({ error: '配置格式错误' });
+    }
+
+    // 如果数据库中没有找到，尝试从预设规则中获取
+    if (!configValue) {
+      const predefinedRules = loadPredefinedNotificationRules();
+      const predefinedRule = predefinedRules.find(rule => rule.id === id);
+
+      if (!predefinedRule) {
+        return res.status(404).json({ error: '通知配置不存在' });
+      }
+
+      config_key = predefinedRule.topic;
+      configValue = {
+        notification_type: predefinedRule.type,
+        enabled: predefinedRule.enabled,
+        // 对于Lark类型，需要组合基础URL和UUID
+        webhook_url: predefinedRule.type === 'lark' && predefinedRule.config.webhook_url
+          ? process.env.TARGET_SERVER_FEISHU + predefinedRule.config.webhook_url
+          : predefinedRule.config.webhook_url,
+        api_key: predefinedRule.config.pushkey || predefinedRule.config.api_key,
+        topic: predefinedRule.config.topic
+      };
     }
 
     // 构建测试消息
@@ -2155,6 +2182,47 @@ router.post('/stats/notification-configs/:id/test', async (req, res) => {
   } catch (error) {
     console.error('测试通知发送失败:', error);
     res.status(500).json({ error: '测试通知发送失败: ' + error.message });
+  }
+});
+
+// ==================== 简洁转发模式配置 API ====================
+
+// 获取简洁转发模式配置
+router.get('/stats/concise-mode-config', async (req, res) => {
+  try {
+    const cfg = await getConciseModeConfig();
+    res.json({ success: true, data: cfg });
+  } catch (error) {
+    console.error('获取简洁转发配置失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+// 更新简洁转发模式配置
+router.put('/stats/concise-mode-config', async (req, res) => {
+  try {
+    const { enabled, tail_len } = req.body || {};
+    if (typeof enabled !== 'boolean') {
+      return res.status(400).json({ error: '启用状态必须是布尔值' });
+    }
+    let tail = parseInt(tail_len !== undefined ? tail_len : 100, 10);
+    if (isNaN(tail) || tail < 1 || tail > 5000) {
+      return res.status(400).json({ error: '截取长度必须在 1-5000 之间' });
+    }
+
+    const ok = await setConciseModeConfig({ enabled, tail_len: tail });
+    if (!ok) return res.status(500).json({ error: '保存失败' });
+
+    // 主动通知主服务刷新缓存（最佳努力）
+    const mainPort = process.env.MAIN_PORT || 20491;
+    try {
+      await fetch(`http://localhost:${mainPort}/internal/cache/refresh-concise`).catch(()=>{});
+    } catch (_) {}
+
+    res.json({ success: true, message: `简洁转发模式已${enabled ? '启用' : '禁用'}`, data: { enabled, tail_len: tail } });
+  } catch (error) {
+    console.error('更新简洁转发配置失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
   }
 });
 
