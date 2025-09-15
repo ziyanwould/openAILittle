@@ -1,7 +1,7 @@
 # OpenAI Little - 开发记录文档
 
-> **更新时间**: 2025-09-14
-> **版本**: 1.7.0 (通知系统数据库化改造)
+> **更新时间**: 2025-09-15
+> **版本**: 1.7.2 (简洁转发功能修复与完善)
 > **作者**: Liu Jiarong  
 
 ## 🏗️ 项目架构概览
@@ -402,6 +402,55 @@ grep "Content Moderation" logs/app.log  # 过滤审查日志
 - 预设规则防误操作保护
 - 完善的错误处理和降级机制
 - 前端组件渲染稳定性增强
+
+---
+
+### 2025-09-15 - v1.7.2 简洁转发增强 + 对话记录完整化
+
+#### 🎯 目标
+- 让“首页-使用情况-请求详情”展示完整对话（包含模型回答）。
+- 强化“简洁转发模式”：仅截取“最新一条用户消息”末尾内容，支持自定义长度，并确保开关即时生效。
+
+#### 🔧 后端
+**对话记录完整化**
+- 新增 `middleware/responseInterceptorMiddleware.js`：
+  - 拦截代理响应（OpenAI/Gemini，支持流式与非流式），抽取模型回答。
+  - 与用户请求形成完整会话，写入 `conversation_logs(messages JSON)`。
+- 在 `index.js` 中引入并在 `loggingMiddleware` 之后启用。
+
+**简洁转发模式增强**
+- 只截取“最新一条用户消息”的末尾（而非整段 body 尾部），语义更准。
+- 支持 `tail_len`（默认 100，范围 1–5000）。
+- 配置即时生效：
+  - 每 3 秒主动拉取一次配置，快速响应开关变化。
+  - 新增内部刷新端点：`GET /internal/cache/refresh-concise`；
+  - `PUT /api/stats/concise-mode-config` 成功后主动回调该端点，立即清缓存。
+- DB 兼容：
+  - `getConciseModeConfig()/setConciseModeConfig()/getConciseModeUpdatedAt()` 统一处理，兼容旧值（布尔/数字/JSON/字符串）。
+- 路由：
+  - `GET /api/stats/concise-mode-config` → `{ enabled, tail_len }`
+  - `PUT /api/stats/concise-mode-config` 接受 `{ enabled:boolean, tail_len:number }`
+
+#### 🎨 前端
+**通知配置（ModerationManagement.vue）**
+- 新增“截取长度”输入框（与简洁开关联动），保存后即时生效。
+- 进入“通知配置”自动加载 `{ enabled, tail_len }`。
+
+**请求详情（UsageTable.vue）**
+- 解析逻辑兼容字符串/对象/数组三类 `messages`，统一归一化渲染；
+- 移除模板内 `JSON.parse`，修复 “Unexpected token 'o'” 报错；
+- 聊天气泡样式，区分“👤 用户 / 🤖 助手”；显示“消息条数”。
+
+#### ✅ 验证
+- 关闭简洁模式：通知显示“最新一条用户消息”的完整文本；
+- 开启并设定 `tail_len=N`：通知显示“末尾 N 字符”；
+- Gemini：兼容 `contents[].parts[].text`；
+- 请求详情：完整展示用户提问 + 模型回答。
+
+#### 🧩 兼容与注意
+- 无破坏性 DB 升级；旧配置值自动兼容解析；
+- 新增内部端点仅用于服务间刷新，不对外暴露；
+- 前端提醒：Element Plus 的 `type="text"` 按钮将废弃，后续改为 `link`（不影响当前功能）。
 
 ---
 

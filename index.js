@@ -36,6 +36,7 @@ const auxiliaryModels = require('./modules/auxiliaryModels'); // 定义辅助模
 const limitRequestBodyLength = require('./middleware/limitRequestBodyLength'); // 引入文本长度限制中间件
 const loggingMiddleware = require('./middleware/loggingMiddleware'); // 引入日志中间件
 const contentModerationMiddleware = require('./middleware/contentModerationMiddleware'); // 引入内容审查中间件
+const responseInterceptorMiddleware = require('./middleware/responseInterceptorMiddleware'); // 引入响应拦截中间件
 const configManager = require('./middleware/configManager'); // 引入配置管理器
 const { initializeSystemConfigs, getNotificationConfigs, pool, getConciseModeConfig, getConciseModeUpdatedAt } = require('./db'); // 引入系统配置初始化与数据库连接池
 
@@ -1072,6 +1073,7 @@ buildChatnioRateLimiters(); // 构建 chatnioRateLimiters 对象
 app.use(restrictGeminiModelAccess); // 应用 restrictGeminiModelAccess 中间件
 
 app.use(loggingMiddleware);  // <-- 中间件已优化为异步无阻塞
+app.use(responseInterceptorMiddleware); // 响应拦截中间件，用于记录AI回答
 
 // 内容审核中间件已移至校验链末尾
 
