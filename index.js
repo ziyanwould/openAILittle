@@ -1100,7 +1100,8 @@ app.use(responseInterceptorMiddleware); // 响应拦截中间件，用于记录A
 app.use('/freegemini', contentModerationMiddleware, freeGeminiProxy);
 
 // 应用 googleRateLimiter 到 googleProxy
-app.use('/google', defaultLengthLimiter, googleRateLimiter, googleProxy, contentModerationMiddleware);
+// 对 Google 路由：先审核再转发
+app.use('/google', defaultLengthLimiter, googleRateLimiter, contentModerationMiddleware, googleProxy);
 
 // 应用 modifyRequestBodyMiddleware 中间件
 app.use(modifyRequestBodyMiddleware);
