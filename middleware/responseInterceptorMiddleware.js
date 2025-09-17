@@ -60,6 +60,9 @@ function extractUserMessage(body) {
         .map(part => part.text)
         .join(' ');
     }
+  } else if (body.prompt) {
+    // Cloudflare AI 格式 (文生图等)
+    userMessage = body.prompt;
   }
 
   return userMessage;
@@ -89,6 +92,14 @@ function parseAIResponse(data, route) {
                   fullContent += parts[0].text;
                 }
               }
+            } else if (route.startsWith('/cloudflare')) {
+              // Cloudflare AI 流式格式处理 (如果有的话)
+              // Cloudflare AI 图像生成通常不是流式的，但保留扩展性
+              if (chunk.result && chunk.result.image) {
+                fullContent = '[Generated Image]';
+              } else if (chunk.content) {
+                fullContent += chunk.content;
+              }
             } else {
               // OpenAI 流式格式
               if (chunk.choices && chunk.choices[0] && chunk.choices[0].delta) {
@@ -115,6 +126,19 @@ function parseAIResponse(data, route) {
           const parts = response.candidates[0].content.parts;
           if (parts && parts[0] && parts[0].text) {
             return parts[0].text;
+          }
+        }
+      } else if (route.startsWith('/cloudflare')) {
+        // Cloudflare AI 非流式格式
+        if (response.success && response.result) {
+          if (response.result.image) {
+            // 图像生成结果
+            return '[Generated Image: Base64 data]';
+          } else if (response.result.text) {
+            // 文本生成结果
+            return response.result.text;
+          } else if (typeof response.result === 'string') {
+            return response.result;
           }
         }
       } else {
@@ -199,7 +223,8 @@ module.exports = function responseInterceptorMiddleware(req, res, next) {
                       route.startsWith('/chatnio/') ||
                       route.startsWith('/freelyai/') ||
                       route.startsWith('/freeopenai/') ||
-                      route.startsWith('/freegemini/');
+                      route.startsWith('/freegemini/') ||
+                      route.startsWith('/cloudflare/');
 
   if (!isAIRequest) {
     return next();
@@ -211,7 +236,7 @@ module.exports = function responseInterceptorMiddleware(req, res, next) {
 
   responseCache.set(requestKey, {
     userId,
-    messages: req.body.messages || req.body.contents || [],
+    messages: req.body.messages || req.body.contents || (req.body.prompt ? [{ role: 'user', content: req.body.prompt }] : []),
     timestamp: Date.now(),
     route
   });

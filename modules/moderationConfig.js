@@ -80,6 +80,22 @@ module.exports = {
       models: {
         'default': { enabled: false }
       }
+    },
+
+    '/cloudflare': {
+      enabled: true,
+      description: 'Cloudflare AI 图像生成路由',
+      models: {
+        '@cf/black-forest-labs/flux-1-schnell': { enabled: true },
+        '@cf/lykon/dreamshaper-8-lcm': { enabled: true },
+        '@cf/leonardo/phoenix-1.0': { enabled: true },
+        '@cf/leonardo/lucid-origin': { enabled: true },
+        '@cf/runwayml/stable-diffusion-v1-5-inpainting': { enabled: true },
+        '@cf/bytedance/stable-diffusion-xl-lightning': { enabled: true },
+        '@cf/stabilityai/stable-diffusion-xl-base-1.0': { enabled: true },
+        '@cf/runwayml/stable-diffusion-v1-5-img2img': { enabled: true },
+        'default': { enabled: true }
+      }
     }
   },
 

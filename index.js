@@ -946,6 +946,41 @@ const freeGeminiProxy = createProxyMiddleware({
   },
 });
 
+// 创建 /cloudflare 路径的代理中间件，支持文生图、图生图、局部重绘等功能
+const cloudflareProxy = createProxyMiddleware({
+  target: 'https://api.cloudflare.com', // Cloudflare AI API
+  changeOrigin: true,
+  // 不做路径重写，因为请求路径已经是完整的 Cloudflare API 路径
+  // pathRewrite: 直接转发原始路径
+  on: {
+    proxyReq: (proxyReq, req, res) => {
+      // 不设置认证头，由代理服务自动处理
+
+      // 确保Content-Type正确
+      if (req.body) {
+        proxyReq.setHeader('Content-Type', 'application/json');
+      }
+
+      // 修复请求体
+      fixRequestBody(proxyReq, req, res);
+    },
+    proxyRes: (proxyRes, req, res) => {
+      // 简化通知发送，避免函数未定义错误
+      (async () => {
+        try {
+          // 发送通知（使用cloudflare主题）
+          await notices({
+            title: '🎨 Cloudflare AI 图像生成',
+            message: `Prompt: ${req.body.prompt || 'No prompt'}`
+          }, req.body, 'cloudflare');
+        } catch (error) {
+          console.error('Failed to send Cloudflare notification:', error);
+        }
+      })();
+    },
+  },
+});
+
 // 构建 chatnioRateLimiters 对象
 function buildChatnioRateLimiters() {
   const { commonLimits, customLimits } = chatnioRateLimits;
@@ -1098,6 +1133,10 @@ app.use(responseInterceptorMiddleware); // 响应拦截中间件，用于记录A
 // 应用 /free/gemini 代理中间件
 // 将内容审核置于代理之前，避免响应已结束导致审核不生效
 app.use('/freegemini', contentModerationMiddleware, freeGeminiProxy);
+
+// 应用 /cloudflare 代理中间件，支持文生图、图生图、局部重绘等功能
+// 对 Cloudflare 路由：先审核再转发
+app.use('/cloudflare', contentModerationMiddleware, cloudflareProxy);
 
 // 应用 googleRateLimiter 到 googleProxy
 // 对 Google 路由：先审核再转发

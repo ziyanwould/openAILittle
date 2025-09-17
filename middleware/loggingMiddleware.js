@@ -38,6 +38,9 @@ async function prepareLogData(req) {
               return '';
           }).join('; '); // 用分号和空格连接
       }
+  } else if (req.body.prompt) {
+      // Cloudflare AI 格式 (文生图等)
+      content = req.body.prompt;
   }
 
   return {
@@ -50,7 +53,7 @@ async function prepareLogData(req) {
     route: req.originalUrl.split('/')[1],
     content,
     is_restricted: await isRestrictedModel(req.body.model),
-    messages: req.body.messages || req.body.contents || [], // 完整的消息
+    messages: req.body.messages || req.body.contents || (req.body.prompt ? [{ role: 'user', content: req.body.prompt }] : []), // 完整的消息
   };
 }
 
