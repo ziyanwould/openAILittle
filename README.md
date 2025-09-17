@@ -1,13 +1,14 @@
 # OpenAI Little - AI 模型代理服务
 
-一个功能完善的AI模型代理服务，为多种AI模型（OpenAI、Google Gemini等）提供统一的代理访问接口，具备企业级的安全防护和限流控制能力。
+一个功能完善的**多模态AI代理平台**，为8种AI模型（OpenAI、Google Gemini、SiliconFlow等）提供统一的代理访问接口，支持文本生成、图像生成、语音合成等多种AI能力，具备企业级的安全防护和限流控制能力。
 
 ## 📋 项目概述
 
-本项目是一个基于 Node.js 的AI模型代理服务，采用微服务架构设计，提供以下核心能力：
+本项目是一个基于 Node.js 的**多模态AI代理服务**，采用微服务架构设计，提供以下核心能力：
 
-- 🔄 **多AI模型代理** - 统一接口访问 OpenAI、Gemini、ChatNio 等模型
-- 🛡️ **安全防护系统** - 多层安全验证和内容过滤机制
+- 🔄 **多AI模型代理** - 统一接口访问 8个AI平台，支持文本、图像、语音等多种AI能力
+- 🎨 **图像生成服务** - 集成Cloudflare AI和SiliconFlow，支持文生图、图生图、图像编辑
+- 🛡️ **安全防护系统** - 多层安全验证和内容过滤机制，支持多模态内容审核
 - ⚡ **智能限流控制** - 灵活的限流策略和反滥用机制
 - 📊 **监控统计系统** - 实时监控和使用统计分析
 - 🚀 **容器化部署** - 基于 Docker 的快速部署方案
@@ -70,14 +71,16 @@ openAILittle-1/
 
 支持多种AI模型的统一代理访问：
 
-| 路由路径 | 目标服务 | 描述 |
-|---------|---------|------|
-| `/v1/*` | OpenAI API | 标准 OpenAI 接口代理 |
-| `/google/*` | Google Gemini | Gemini 模型代理 |
-| `/chatnio/*` | ChatNio | ChatNio 平台代理 |
-| `/freelyai/*` | FreelyAI | FreelyAI 服务代理 |
-| `/freeopenai/*` | Free OpenAI | 免费 OpenAI 接口 |
-| `/freegemini/*` | Free Gemini | 免费 Gemini 接口 |
+| 路由路径 | 目标服务 | 支持功能 | 描述 |
+|---------|---------|----------|------|
+| `/v1/*` | OpenAI API | 文本生成、TTS | 标准 OpenAI 接口代理 |
+| `/google/*` | Google Gemini | 文本生成、多模态 | Gemini 模型代理 |
+| `/chatnio/*` | ChatNio | 文本生成 | ChatNio 平台代理 |
+| `/freelyai/*` | FreelyAI | 文本生成 | FreelyAI 服务代理 |
+| `/freeopenai/*` | Free OpenAI | 文本生成 | 免费 OpenAI 接口 |
+| `/freegemini/*` | Free Gemini | 文本生成、多模态 | 免费 Gemini 接口 |
+| `/cloudflare/*` | Cloudflare AI | 图像生成、文生图 | Cloudflare Workers AI |
+| `/siliconflow/*` | SiliconFlow AI | 图像生成、图生图 | 🆕 硅基流动图像生成 |
 
 ### 2. 安全防护系统
 
@@ -270,6 +273,7 @@ pnpm run start:stats   # 统计服务
 
 ---
 
-**作者**: Liu Jiarong  
-**版本**: 1.0.0  
+**作者**: Liu Jiarong
+**版本**: 1.9.0 (SiliconFlow AI代理支持 + 多模态扩展)
+**更新时间**: 2025-09-17
 **许可证**: ISC
