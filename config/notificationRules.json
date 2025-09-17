@@ -109,6 +109,28 @@
       "config": {
         "webhook_url": "5f678901-ab23-4cd5-ef67-890123456789"
       }
+    },
+    {
+      "id": "siliconflow_pushdeer",
+      "name": "SiliconFlow AI PushDeer",
+      "topic": "siliconflow",
+      "type": "pushdeer",
+      "enabled": true,
+      "readonly": true,
+      "config": {
+        "pushkey": "PDU33066TKVhg9RDmJz9FG8r1QpewXcgZaT8eNywx"
+      }
+    },
+    {
+      "id": "siliconflow_lark",
+      "name": "SiliconFlow AI Lark",
+      "topic": "siliconflow",
+      "type": "lark",
+      "enabled": true,
+      "readonly": true,
+      "config": {
+        "webhook_url": "5f678901-ab23-4cd5-ef67-890123456789"
+      }
     }
   ]
 }

@@ -56,6 +56,15 @@ async function prepareLogData(req) {
     }
   }
 
+  // 对于 SiliconFlow AI 请求，确保模型名称被正确提取
+  if (req.originalUrl.includes('/siliconflow/')) {
+    // SiliconFlow 的模型名称通常直接在请求体的 model 字段中
+    // 如果没有 model 字段，尝试从 URL 路径提取
+    if (!modelName && req.originalUrl.includes('/v1/images/generations')) {
+      modelName = 'image-generation'; // 默认图像生成标识
+    }
+  }
+
   return {
     user_id: isTimestamp(userId) ? 'anonymous' : userId,
     ip:  req.headers['x-user-ip'] || req.body.user_ip || req.ip,

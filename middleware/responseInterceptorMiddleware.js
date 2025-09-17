@@ -100,6 +100,16 @@ function parseAIResponse(data, route) {
               } else if (chunk.content) {
                 fullContent += chunk.content;
               }
+            } else if (route.startsWith('/siliconflow')) {
+              // SiliconFlow AI 流式格式处理 (如果有的话)
+              // SiliconFlow 图像生成通常不是流式的，但保留扩展性
+              if (chunk.images && chunk.images.length > 0) {
+                fullContent = '[Generated Image]';
+              } else if (chunk.data && chunk.data.length > 0) {
+                fullContent = '[Generated Images: ' + chunk.data.length + ' items]';
+              } else if (chunk.content) {
+                fullContent += chunk.content;
+              }
             } else {
               // OpenAI 流式格式
               if (chunk.choices && chunk.choices[0] && chunk.choices[0].delta) {
@@ -118,7 +128,20 @@ function parseAIResponse(data, route) {
       return fullContent.trim();
     } else {
       // 处理非流式响应
-      const response = JSON.parse(data);
+      // 检查是否是二进制数据（图片等）
+      if (data.startsWith('\uFFFD') || data.includes('JFIF') || data.includes('PNG')) {
+        // 这是二进制图片数据，不是JSON
+        return '[Generated Image: Binary data]';
+      }
+
+      let response;
+      try {
+        response = JSON.parse(data);
+      } catch (error) {
+        // 如果JSON解析失败，可能是二进制数据或其他格式
+        console.log(`[ResponseInterceptor] Non-JSON response detected for route: ${route}`);
+        return '[Generated Content: Non-JSON response]';
+      }
 
       if (route.startsWith('/google') || route.startsWith('/freegemini')) {
         // Gemini 非流式格式
@@ -140,6 +163,21 @@ function parseAIResponse(data, route) {
           } else if (typeof response.result === 'string') {
             return response.result;
           }
+        }
+      } else if (route.startsWith('/siliconflow')) {
+        // SiliconFlow AI 非流式格式
+        if (response.images && response.images.length > 0) {
+          // 图像生成结果（SiliconFlow格式）
+          return `[Generated Images: ${response.images.length} items]`;
+        } else if (response.data && response.data.length > 0) {
+          // 图像生成结果（备用格式）
+          return `[Generated Images: ${response.data.length} items]`;
+        } else if (response.choices && response.choices[0] && response.choices[0].message) {
+          // 文本生成结果（如果SiliconFlow也支持文本生成）
+          return response.choices[0].message.content || '';
+        } else if (response.text) {
+          // 直接文本结果
+          return response.text;
         }
       } else {
         // OpenAI 非流式格式
@@ -224,7 +262,8 @@ module.exports = function responseInterceptorMiddleware(req, res, next) {
                       route.startsWith('/freelyai/') ||
                       route.startsWith('/freeopenai/') ||
                       route.startsWith('/freegemini/') ||
-                      route.startsWith('/cloudflare/');
+                      route.startsWith('/cloudflare/') ||
+                      route.startsWith('/siliconflow/');
 
   if (!isAIRequest) {
     return next();

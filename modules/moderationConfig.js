@@ -96,6 +96,17 @@ module.exports = {
         '@cf/runwayml/stable-diffusion-v1-5-img2img': { enabled: true },
         'default': { enabled: true }
       }
+    },
+
+    '/siliconflow': {
+      enabled: true,
+      description: 'SiliconFlow AI 图像生成路由',
+      models: {
+        'Qwen/Qwen-Image': { enabled: true },           // 文生图模型
+        'Qwen/Qwen-Image-Edit': { enabled: true },      // 图生图/图像编辑模型
+        'Kwai-Kolors/Kolors': { enabled: true },        // 快手可图文生图模型
+        'default': { enabled: true }
+      }
     }
   },
 

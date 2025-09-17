@@ -950,15 +950,20 @@ const freeGeminiProxy = createProxyMiddleware({
 const cloudflareProxy = createProxyMiddleware({
   target: 'https://api.cloudflare.com', // Cloudflare AI API
   changeOrigin: true,
-  // 不做路径重写，因为请求路径已经是完整的 Cloudflare API 路径
-  // pathRewrite: 直接转发原始路径
+  pathRewrite: {
+    '^/cloudflare': '', // 去掉 /cloudflare 前缀
+  },
+  timeout: 60000, // 60秒超时
   on: {
     proxyReq: (proxyReq, req, res) => {
-      // 不设置认证头，由代理服务自动处理
-
       // 确保Content-Type正确
       if (req.body) {
         proxyReq.setHeader('Content-Type', 'application/json');
+      }
+
+      // 转发原有的Authorization头
+      if (req.headers.authorization) {
+        proxyReq.setHeader('Authorization', req.headers.authorization);
       }
 
       // 修复请求体
@@ -975,6 +980,46 @@ const cloudflareProxy = createProxyMiddleware({
           }, req.body, 'cloudflare');
         } catch (error) {
           console.error('Failed to send Cloudflare notification:', error);
+        }
+      })();
+    },
+  },
+});
+
+// 创建 /siliconflow 路径的代理中间件，支持文生图、图生图等功能
+const siliconflowProxy = createProxyMiddleware({
+  target: 'https://api.siliconflow.cn', // SiliconFlow AI API
+  changeOrigin: true,
+  pathRewrite: {
+    '^/siliconflow': '', // 去掉 /siliconflow 前缀
+  },
+  timeout: 60000, // 60秒超时
+  on: {
+    proxyReq: (proxyReq, req, res) => {
+      // 确保Content-Type正确
+      if (req.body) {
+        proxyReq.setHeader('Content-Type', 'application/json');
+      }
+
+      // 转发原有的Authorization头
+      if (req.headers.authorization) {
+        proxyReq.setHeader('Authorization', req.headers.authorization);
+      }
+
+      // 修复请求体
+      fixRequestBody(proxyReq, req, res);
+    },
+    proxyRes: (proxyRes, req, res) => {
+      // 异步发送通知，避免阻塞
+      (async () => {
+        try {
+          // 发送通知（使用siliconflow主题）
+          await notices({
+            title: '🎨 SiliconFlow AI 图像生成',
+            message: `Model: ${req.body.model || 'Unknown'} | Prompt: ${req.body.prompt || 'No prompt'}`
+          }, req.body, 'siliconflow');
+        } catch (error) {
+          console.error('Failed to send SiliconFlow notification:', error);
         }
       })();
     },
@@ -1137,6 +1182,10 @@ app.use('/freegemini', contentModerationMiddleware, freeGeminiProxy);
 // 应用 /cloudflare 代理中间件，支持文生图、图生图、局部重绘等功能
 // 对 Cloudflare 路由：先审核再转发
 app.use('/cloudflare', contentModerationMiddleware, cloudflareProxy);
+
+// 应用 /siliconflow 代理中间件，支持文生图、图生图等功能
+// 对 SiliconFlow 路由：先审核再转发
+app.use('/siliconflow', contentModerationMiddleware, siliconflowProxy);
 
 // 应用 googleRateLimiter 到 googleProxy
 // 对 Google 路由：先审核再转发
