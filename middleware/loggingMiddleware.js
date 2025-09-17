@@ -43,16 +43,29 @@ async function prepareLogData(req) {
       content = req.body.prompt;
   }
 
+  // 确定模型名称
+  let modelName = req.body.model;
+
+  // 对于 Cloudflare AI 请求，从 URL 路径中提取模型名称
+  if (req.originalUrl.includes('/cloudflare/') && !modelName) {
+    const urlParts = req.originalUrl.split('/');
+    // 查找 @cf/ 开头的模型名称
+    const cfModelIndex = urlParts.findIndex(part => part.startsWith('@cf/'));
+    if (cfModelIndex !== -1) {
+      modelName = urlParts[cfModelIndex];
+    }
+  }
+
   return {
     user_id: isTimestamp(userId) ? 'anonymous' : userId,
     ip:  req.headers['x-user-ip'] || req.body.user_ip || req.ip,
     timestamp: new Date(),
-    model: req.body.model,
+    model: modelName || 'unknown',
     token_prefix: prefix,
     token_suffix: suffix,
     route: req.originalUrl.split('/')[1],
     content,
-    is_restricted: await isRestrictedModel(req.body.model),
+    is_restricted: await isRestrictedModel(modelName),
     messages: req.body.messages || req.body.contents || (req.body.prompt ? [{ role: 'user', content: req.body.prompt }] : []), // 完整的消息
   };
 }
