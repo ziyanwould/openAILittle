@@ -955,33 +955,13 @@ const cloudflareProxy = createProxyMiddleware({
   },
   timeout: 60000, // 60秒超时
   on: {
-    proxyReq: (proxyReq, req, res) => {
-      // 确保Content-Type正确
-      if (req.body) {
-        proxyReq.setHeader('Content-Type', 'application/json');
-      }
-
-      // 转发原有的Authorization头
-      if (req.headers.authorization) {
-        proxyReq.setHeader('Authorization', req.headers.authorization);
-      }
-
-      // 修复请求体
-      fixRequestBody(proxyReq, req, res);
-    },
+    proxyReq: fixRequestBody,
     proxyRes: (proxyRes, req, res) => {
-      // 简化通知发送，避免函数未定义错误
-      (async () => {
-        try {
-          // 发送通知（使用cloudflare主题）
-          await notices({
-            title: '🎨 Cloudflare AI 图像生成',
-            message: `Prompt: ${req.body.prompt || 'No prompt'}`
-          }, req.body, 'cloudflare');
-        } catch (error) {
-          console.error('Failed to send Cloudflare notification:', error);
-        }
-      })();
+      // 发送通知
+      notices({
+        title: '🎨 Cloudflare AI 图像生成',
+        message: `Prompt: ${req.body.prompt || 'No prompt'}`
+      }, req.body, 'cloudflare').catch(() => {});
     },
   },
 });
@@ -995,33 +975,13 @@ const siliconflowProxy = createProxyMiddleware({
   },
   timeout: 60000, // 60秒超时
   on: {
-    proxyReq: (proxyReq, req, res) => {
-      // 确保Content-Type正确
-      if (req.body) {
-        proxyReq.setHeader('Content-Type', 'application/json');
-      }
-
-      // 转发原有的Authorization头
-      if (req.headers.authorization) {
-        proxyReq.setHeader('Authorization', req.headers.authorization);
-      }
-
-      // 修复请求体
-      fixRequestBody(proxyReq, req, res);
-    },
+    proxyReq: fixRequestBody,
     proxyRes: (proxyRes, req, res) => {
-      // 异步发送通知，避免阻塞
-      (async () => {
-        try {
-          // 发送通知（使用siliconflow主题）
-          await notices({
-            title: '🎨 SiliconFlow AI 图像生成',
-            message: `Model: ${req.body.model || 'Unknown'} | Prompt: ${req.body.prompt || 'No prompt'}`
-          }, req.body, 'siliconflow');
-        } catch (error) {
-          console.error('Failed to send SiliconFlow notification:', error);
-        }
-      })();
+      // 发送通知
+      notices({
+        title: '🎨 SiliconFlow AI 图像生成',
+        message: `Model: ${req.body.model || 'Unknown'} | Prompt: ${req.body.prompt || 'No prompt'}`
+      }, req.body, 'siliconflow').catch(() => {});
     },
   },
 });
