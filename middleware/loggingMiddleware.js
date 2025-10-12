@@ -1,7 +1,18 @@
 // middleware/loggingMiddleware.js
+/**
+ * 日志记录中间件
+ *
+ * 功能:
+ * - 提取请求数据
+ * - 集成会话管理 (v1.10.0新增)
+ * - 将日志数据加入队列
+ *
+ * 状态: 生产环境使用
+ */
 const logger = require('../lib/logger');
 const { formatToken, isRestrictedModel, findOrCreateUser } = require('../db');
 const { pool } = require('../db'); // 引入 pool
+const { getOrCreateConversationId } = require('../utils/conversationManager');
 
 async function prepareLogData(req) {
   const authHeader = req.headers.authorization || '';
@@ -65,7 +76,8 @@ async function prepareLogData(req) {
     }
   }
 
-  return {
+  // 构建基础日志数据
+  const baseLogData = {
     user_id: isTimestamp(userId) ? 'anonymous' : userId,
     ip:  req.headers['x-user-ip'] || req.body.user_ip || req.ip,
     timestamp: new Date(),
@@ -77,6 +89,25 @@ async function prepareLogData(req) {
     is_restricted: await isRestrictedModel(modelName),
     messages: req.body.messages || req.body.contents || (req.body.prompt ? [{ role: 'user', content: req.body.prompt }] : []), // 完整的消息
   };
+
+  // 🆕 v1.10.0: 获取或创建会话ID
+  try {
+    const { conversationId, isNew } = await getOrCreateConversationId(req, baseLogData);
+
+    return {
+      ...baseLogData,
+      conversation_id: conversationId,
+      is_new_conversation: isNew
+    };
+  } catch (error) {
+    // 降级处理: 如果会话管理失败,仍然记录日志但不包含会话信息
+    console.error('[LoggingMiddleware] 获取会话ID失败:', error.message);
+    return {
+      ...baseLogData,
+      conversation_id: null,
+      is_new_conversation: false
+    };
+  }
 }
 
 // 判断是否为时间戳 (已存在，无需修改)

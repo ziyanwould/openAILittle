@@ -1,4 +1,15 @@
 // middleware/responseInterceptorMiddleware.js
+/**
+ * 响应拦截中间件
+ *
+ * 功能:
+ * - 拦截AI响应内容
+ * - 解析不同格式的AI回复 (OpenAI/Gemini/Cloudflare/SiliconFlow)
+ * - 更新 conversation_logs 添加AI回答
+ * - v1.10.0优化: 使用 conversation_id 直接定位,简化查询逻辑
+ *
+ * 状态: 生产环境使用
+ */
 const { pool } = require('../db');
 
 // 响应数据缓存，用于存储对话数据
@@ -29,20 +40,24 @@ function normalizeUserId(userId) {
 }
 
 /**
- * 生成请求唯一标识符
+ * 生成请求唯一标识符 (v1.10.0优化: 优先使用 conversation_id)
  */
 function generateRequestKey(req) {
+  // 🆕 优先使用 conversation_id 作为缓存键
+  const conversationId = req.headers['x-conversation-id'] || req.body.conversation_id;
+  if (conversationId) {
+    return conversationId;
+  }
+
+  // 兜底: 使用旧的哈希方案
   const rawUserId = req.headers['x-user-id'] || req.body.user || 'anonymous';
   const userId = normalizeUserId(rawUserId);
   const userContent = extractUserMessage(req.body);
-
-  // 对于匿名用户,使用IP地址作为标识的一部分
   const userIp = req.headers['x-user-ip'] || req.body.user_ip || req.ip;
 
-  // 使用用户ID/IP和用户消息的哈希作为唯一键
   const crypto = require('crypto');
   const hash = crypto.createHash('md5')
-    .update(userId + userIp + userContent)
+    .update(userId + userIp + userContent + Date.now())
     .digest('hex')
     .substring(0, 8);
 
@@ -211,7 +226,7 @@ function parseAIResponse(data, route) {
 }
 
 /**
- * 更新数据库中的对话记录，添加AI回答
+ * 更新数据库中的对话记录，添加AI回答 (v1.10.0优化: 使用 conversation_id 直接定位)
  */
 async function updateConversationWithResponse(requestKey, aiResponse) {
   const cacheData = responseCache.get(requestKey);
@@ -233,67 +248,86 @@ async function updateConversationWithResponse(requestKey, aiResponse) {
       fullConversation.push(aiMessage);
     }
 
-    // 方案1: 通过user_id和时间范围查询(主要方案)
+    // 🆕 v1.10.0: 优先使用 conversation_id 直接更新 (精准、高效)
+    if (cacheData.conversation_id) {
+      const [result] = await pool.query(
+        'UPDATE conversation_logs SET messages = ?, message_count = ?, updated_at = CURRENT_TIMESTAMP WHERE conversation_uuid = ?',
+        [JSON.stringify(fullConversation), fullConversation.length, cacheData.conversation_id]
+      );
+
+      if (result.affectedRows > 0) {
+        console.log(`[ResponseInterceptor] ✓ 已更新对话 ${cacheData.conversation_id}, AI回答: ${aiResponse.length}字符`);
+      } else {
+        console.log(`[ResponseInterceptor] ⚠️  未找到会话: ${cacheData.conversation_id}`);
+      }
+
+      // 清理缓存
+      responseCache.delete(requestKey);
+      return;
+    }
+
+    // 兜底: 如果没有 conversation_id, 使用旧的三层查询逻辑 (保留兼容性)
+    console.log(`[ResponseInterceptor] ⚠️  缺少conversation_id,使用兜底查询`);
+
+    // 方案1: 通过user_id和时间范围查询
     let [rows] = await pool.query(
-      `SELECT cl.conversation_id, cl.request_id FROM conversation_logs cl
+      `SELECT cl.conversation_uuid, cl.request_id FROM conversation_logs cl
        JOIN requests r ON cl.request_id = r.id
        WHERE r.user_id = ? AND r.timestamp >= ? AND r.timestamp <= ?
-       ORDER BY cl.conversation_id DESC LIMIT 1`,
+       ORDER BY cl.updated_at DESC LIMIT 1`,
       [
         cacheData.userId,
-        new Date(cacheData.timestamp - 10000),  // 请求前10秒
-        new Date(cacheData.timestamp + 10000)   // 请求后10秒
+        new Date(cacheData.timestamp - 10000),
+        new Date(cacheData.timestamp + 10000)
       ]
     );
 
-    // 方案2: 备份方案 - 如果主方案失败,通过IP和时间范围查询(适用于匿名用户)
+    // 方案2: 通过IP和时间范围查询
     if (rows.length === 0 && cacheData.userIp) {
       console.log(`[ResponseInterceptor] 主查询失败,尝试通过IP查询: ${cacheData.userIp}`);
       [rows] = await pool.query(
-        `SELECT cl.conversation_id, cl.request_id FROM conversation_logs cl
+        `SELECT cl.conversation_uuid, cl.request_id FROM conversation_logs cl
          JOIN requests r ON cl.request_id = r.id
          WHERE r.ip = ? AND r.timestamp >= ? AND r.timestamp <= ?
-         ORDER BY cl.conversation_id DESC LIMIT 1`,
+         ORDER BY cl.updated_at DESC LIMIT 1`,
         [
           cacheData.userIp,
-          new Date(cacheData.timestamp - 10000),  // 请求前10秒
-          new Date(cacheData.timestamp + 10000)   // 请求后10秒
+          new Date(cacheData.timestamp - 10000),
+          new Date(cacheData.timestamp + 10000)
         ]
       );
     }
 
-    // 方案3: 终极兜底 - 如果前两个方案都失败,直接查询该用户最新的记录(不考虑时间)
+    // 方案3: 终极兜底 - 查询该用户最新记录
     if (rows.length === 0 && cacheData.userId !== 'anonymous') {
       console.log(`[ResponseInterceptor] IP查询也失败,使用终极兜底查询: user=${cacheData.userId}`);
       [rows] = await pool.query(
-        `SELECT cl.conversation_id, cl.request_id, r.timestamp FROM conversation_logs cl
+        `SELECT cl.conversation_uuid, cl.request_id, r.timestamp FROM conversation_logs cl
          JOIN requests r ON cl.request_id = r.id
          WHERE r.user_id = ?
-         ORDER BY cl.conversation_id DESC LIMIT 1`,
+         ORDER BY cl.updated_at DESC LIMIT 1`,
         [cacheData.userId]
       );
 
-      // 如果找到记录,检查时间差是否合理(不超过1分钟)
       if (rows.length > 0) {
         const timeDiff = Math.abs(new Date(rows[0].timestamp) - cacheData.timestamp);
-        if (timeDiff > 60000) { // 超过1分钟
+        if (timeDiff > 60000) {
           console.log(`[ResponseInterceptor] ⚠️  终极兜底找到记录但时间差过大: ${Math.round(timeDiff/1000)}秒,放弃更新`);
-          rows = []; // 清空结果,放弃更新
+          rows = [];
         }
       }
     }
 
     if (rows.length > 0) {
-      const conversationId = rows[0].conversation_id;
+      const conversationUuid = rows[0].conversation_uuid;
       const requestId = rows[0].request_id;
 
-      // 更新conversation_logs记录，添加AI回答
       await pool.query(
-        'UPDATE conversation_logs SET messages = ? WHERE conversation_id = ?',
-        [JSON.stringify(fullConversation), conversationId]
+        'UPDATE conversation_logs SET messages = ?, message_count = ?, updated_at = CURRENT_TIMESTAMP WHERE conversation_uuid = ?',
+        [JSON.stringify(fullConversation), fullConversation.length, conversationUuid]
       );
 
-      console.log(`[ResponseInterceptor] ✓ 已更新对话记录 ID:${conversationId} (request:${requestId}), AI回答: ${aiResponse.length}字符`);
+      console.log(`[ResponseInterceptor] ✓ 已更新对话记录 UUID:${conversationUuid} (request:${requestId}), AI回答: ${aiResponse.length}字符`);
     } else {
       console.log(`[ResponseInterceptor] ⚠️  未找到匹配的对话记录: ${requestKey} (user:${cacheData.userId}, ip:${cacheData.userIp})`);
     }
@@ -334,16 +368,20 @@ module.exports = function responseInterceptorMiddleware(req, res, next) {
   const userId = normalizeUserId(rawUserId);
   const userIp = req.headers['x-user-ip'] || req.body.user_ip || req.ip;
 
+  // 🆕 v1.10.0: 获取 conversation_id (如果存在)
+  const conversationId = req.headers['x-conversation-id'] || req.body.conversation_id;
+
   const cacheData = {
     userId,
     userIp,
     messages: req.body.messages || req.body.contents || (req.body.prompt ? [{ role: 'user', content: req.body.prompt }] : []),
     timestamp: Date.now(),
-    route
+    route,
+    conversation_id: conversationId  // 🆕 缓存会话ID
   };
 
   responseCache.set(requestKey, cacheData);
-  console.log(`[ResponseInterceptor] 📝 缓存请求: key=${requestKey}, user=${userId}, ip=${userIp}, messages=${cacheData.messages.length}`);
+  console.log(`[ResponseInterceptor] 📝 缓存请求: key=${requestKey}, user=${userId}, ip=${userIp}, conversation_id=${conversationId || 'N/A'}, messages=${cacheData.messages.length}`);
 
   // 拦截响应
   const originalWrite = res.write;

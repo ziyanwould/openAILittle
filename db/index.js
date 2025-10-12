@@ -214,6 +214,177 @@ async function initializeDatabase() {
     // ==================== 数据库兼容性更新 ====================
     console.log('[4/6] 执行数据库兼容性更新');
 
+    // ========== 会话管理字段兼容性更新 (v1.10.0) ==========
+    // 为 requests 表添加会话管理字段
+    try {
+      console.log('[4/6-1] 检查 requests 表会话字段...');
+      const [requestsColumns] = await connection.query(`
+        SELECT COLUMN_NAME
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'requests'
+      `, [dbConfig.database]);
+
+      const existingColumns = requestsColumns.map(row => row.COLUMN_NAME);
+
+      // 添加 conversation_id 字段
+      if (!existingColumns.includes('conversation_id')) {
+        await connection.query(`
+          ALTER TABLE requests
+          ADD COLUMN conversation_id VARCHAR(36) DEFAULT NULL COMMENT '会话UUID' AFTER is_restricted
+        `);
+        console.log('✓ requests.conversation_id 字段添加成功');
+      } else {
+        console.log('⭕ requests.conversation_id 字段已存在');
+      }
+
+      // 添加 is_new_conversation 字段
+      if (!existingColumns.includes('is_new_conversation')) {
+        await connection.query(`
+          ALTER TABLE requests
+          ADD COLUMN is_new_conversation TINYINT(1) DEFAULT 0 COMMENT '是否新会话开始' AFTER conversation_id
+        `);
+        console.log('✓ requests.is_new_conversation 字段添加成功');
+      } else {
+        console.log('⭕ requests.is_new_conversation 字段已存在');
+      }
+
+      // 创建 conversation_id 索引
+      const [requestsIndexes] = await connection.query(`
+        SHOW INDEX FROM requests WHERE Key_name = 'idx_conversation_id'
+      `);
+      if (requestsIndexes.length === 0) {
+        await connection.query(`
+          CREATE INDEX idx_conversation_id ON requests(conversation_id)
+        `);
+        console.log('✓ requests.idx_conversation_id 索引创建成功');
+      } else {
+        console.log('⭕ requests.idx_conversation_id 索引已存在');
+      }
+    } catch (requestsErr) {
+      console.error('⚠️ requests 表会话字段更新失败:', requestsErr.message);
+      // 不抛出错误,允许系统继续运行
+    }
+
+    // 为 conversation_logs 表添加会话管理字段
+    try {
+      console.log('[4/6-2] 检查 conversation_logs 表会话字段...');
+      const [convLogsColumns] = await connection.query(`
+        SELECT COLUMN_NAME
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'conversation_logs'
+      `, [dbConfig.database]);
+
+      const existingConvColumns = convLogsColumns.map(row => row.COLUMN_NAME);
+
+      // 添加 conversation_uuid 字段 (会话UUID) - ⚠️ 主键已占用conversation_id
+      if (!existingConvColumns.includes('conversation_uuid')) {
+        await connection.query(`
+          ALTER TABLE conversation_logs
+          ADD COLUMN conversation_uuid VARCHAR(36) DEFAULT NULL COMMENT '会话UUID' AFTER request_id
+        `);
+        console.log('✓ conversation_logs.conversation_uuid 字段添加成功');
+      } else {
+        console.log('⭕ conversation_logs.conversation_uuid 字段已存在');
+      }
+
+      // 添加 user_id 字段 (冗余,便于查询)
+      if (!existingConvColumns.includes('user_id')) {
+        await connection.query(`
+          ALTER TABLE conversation_logs
+          ADD COLUMN user_id VARCHAR(36) DEFAULT NULL COMMENT '用户ID(冗余)' AFTER conversation_uuid
+        `);
+        console.log('✓ conversation_logs.user_id 字段添加成功');
+      } else {
+        console.log('⭕ conversation_logs.user_id 字段已存在');
+      }
+
+      // 添加 ip 字段 (冗余,便于匿名用户查询)
+      if (!existingConvColumns.includes('ip')) {
+        await connection.query(`
+          ALTER TABLE conversation_logs
+          ADD COLUMN ip VARCHAR(45) DEFAULT NULL COMMENT 'IP地址(冗余)' AFTER user_id
+        `);
+        console.log('✓ conversation_logs.ip 字段添加成功');
+      } else {
+        console.log('⭕ conversation_logs.ip 字段已存在');
+      }
+
+      // 添加 message_count 字段
+      if (!existingConvColumns.includes('message_count')) {
+        await connection.query(`
+          ALTER TABLE conversation_logs
+          ADD COLUMN message_count INT DEFAULT 0 COMMENT '当前消息总数' AFTER messages
+        `);
+        console.log('✓ conversation_logs.message_count 字段添加成功');
+      } else {
+        console.log('⭕ conversation_logs.message_count 字段已存在');
+      }
+
+      // 添加 last_request_id 字段
+      if (!existingConvColumns.includes('last_request_id')) {
+        await connection.query(`
+          ALTER TABLE conversation_logs
+          ADD COLUMN last_request_id INT DEFAULT NULL COMMENT '最后一次请求ID' AFTER message_count
+        `);
+        console.log('✓ conversation_logs.last_request_id 字段添加成功');
+      } else {
+        console.log('⭕ conversation_logs.last_request_id 字段已存在');
+      }
+
+      // 添加 updated_at 字段
+      if (!existingConvColumns.includes('updated_at')) {
+        await connection.query(`
+          ALTER TABLE conversation_logs
+          ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '最后更新时间' AFTER created_at
+        `);
+        console.log('✓ conversation_logs.updated_at 字段添加成功');
+      } else {
+        console.log('⭕ conversation_logs.updated_at 字段已存在');
+      }
+
+      // 将 request_id 改为可选 (保留兼容性)
+      const [requestIdColumn] = await connection.query(`
+        SELECT IS_NULLABLE
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'conversation_logs' AND COLUMN_NAME = 'request_id'
+      `, [dbConfig.database]);
+
+      if (requestIdColumn.length > 0 && requestIdColumn[0].IS_NULLABLE === 'NO') {
+        await connection.query(`
+          ALTER TABLE conversation_logs
+          MODIFY COLUMN request_id INT DEFAULT NULL COMMENT '第一个请求ID(兼容)'
+        `);
+        console.log('✓ conversation_logs.request_id 字段改为可选');
+      } else {
+        console.log('⭕ conversation_logs.request_id 字段已是可选');
+      }
+
+      // 创建索引
+      const indexesToCreate = [
+        { name: 'idx_conv_conversation_uuid', column: 'conversation_uuid' },
+        { name: 'idx_conv_user_id', column: 'user_id' },
+        { name: 'idx_conv_ip', column: 'ip' }
+      ];
+
+      for (const index of indexesToCreate) {
+        const [existing] = await connection.query(`
+          SHOW INDEX FROM conversation_logs WHERE Key_name = ?
+        `, [index.name]);
+
+        if (existing.length === 0) {
+          await connection.query(`
+            CREATE INDEX ${index.name} ON conversation_logs(${index.column})
+          `);
+          console.log(`✓ conversation_logs.${index.name} 索引创建成功`);
+        } else {
+          console.log(`⭕ conversation_logs.${index.name} 索引已存在`);
+        }
+      }
+    } catch (convLogsErr) {
+      console.error('⚠️ conversation_logs 表会话字段更新失败:', convLogsErr.message);
+      // 不抛出错误,允许系统继续运行
+    }
+
     // 更新 system_configs 表的 config_type ENUM 字段，添加新的类型
     try {
       // 检查当前 ENUM 值
