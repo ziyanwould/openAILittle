@@ -15,17 +15,34 @@ setInterval(() => {
 }, 60 * 1000); // 每分钟清理一次
 
 /**
+ * 判断是否为时间戳格式的userId
+ */
+function isTimestamp(str) {
+  return /^\d+$/.test(str) && str.length >= 10 && str.length <= 13;
+}
+
+/**
+ * 标准化userId (与loggingMiddleware保持一致)
+ */
+function normalizeUserId(userId) {
+  return isTimestamp(userId) ? 'anonymous' : userId;
+}
+
+/**
  * 生成请求唯一标识符
  */
 function generateRequestKey(req) {
-  const userId = req.headers['x-user-id'] || req.body.user || 'anonymous';
-  const timestamp = Date.now();
+  const rawUserId = req.headers['x-user-id'] || req.body.user || 'anonymous';
+  const userId = normalizeUserId(rawUserId);
   const userContent = extractUserMessage(req.body);
 
-  // 使用用户ID、时间戳和用户消息的哈希作为唯一键
+  // 对于匿名用户,使用IP地址作为标识的一部分
+  const userIp = req.headers['x-user-ip'] || req.body.user_ip || req.ip;
+
+  // 使用用户ID/IP和用户消息的哈希作为唯一键
   const crypto = require('crypto');
   const hash = crypto.createHash('md5')
-    .update(userId + timestamp + userContent)
+    .update(userId + userIp + userContent)
     .digest('hex')
     .substring(0, 8);
 
@@ -199,7 +216,7 @@ function parseAIResponse(data, route) {
 async function updateConversationWithResponse(requestKey, aiResponse) {
   const cacheData = responseCache.get(requestKey);
   if (!cacheData) {
-    console.log(`未找到请求缓存: ${requestKey}`);
+    console.log(`[ResponseInterceptor] 未找到请求缓存: ${requestKey}`);
     return;
   }
 
@@ -211,22 +228,64 @@ async function updateConversationWithResponse(requestKey, aiResponse) {
     if (aiResponse && aiResponse.trim()) {
       const aiMessage = {
         role: 'assistant',
-        content: [{ type: 'text', text: aiResponse }]
+        content: aiResponse
       };
       fullConversation.push(aiMessage);
     }
 
-    // 查询最新的与该请求相关的conversation_logs记录
-    const [rows] = await pool.query(
-      `SELECT cl.conversation_id FROM conversation_logs cl
+    // 方案1: 通过user_id和时间范围查询(主要方案)
+    let [rows] = await pool.query(
+      `SELECT cl.conversation_id, cl.request_id FROM conversation_logs cl
        JOIN requests r ON cl.request_id = r.id
-       WHERE r.user_id = ? AND r.timestamp >= ?
+       WHERE r.user_id = ? AND r.timestamp >= ? AND r.timestamp <= ?
        ORDER BY cl.conversation_id DESC LIMIT 1`,
-      [cacheData.userId, new Date(cacheData.timestamp - 10000)] // 允许10秒误差
+      [
+        cacheData.userId,
+        new Date(cacheData.timestamp - 10000),  // 请求前10秒
+        new Date(cacheData.timestamp + 10000)   // 请求后10秒
+      ]
     );
+
+    // 方案2: 备份方案 - 如果主方案失败,通过IP和时间范围查询(适用于匿名用户)
+    if (rows.length === 0 && cacheData.userIp) {
+      console.log(`[ResponseInterceptor] 主查询失败,尝试通过IP查询: ${cacheData.userIp}`);
+      [rows] = await pool.query(
+        `SELECT cl.conversation_id, cl.request_id FROM conversation_logs cl
+         JOIN requests r ON cl.request_id = r.id
+         WHERE r.ip = ? AND r.timestamp >= ? AND r.timestamp <= ?
+         ORDER BY cl.conversation_id DESC LIMIT 1`,
+        [
+          cacheData.userIp,
+          new Date(cacheData.timestamp - 10000),  // 请求前10秒
+          new Date(cacheData.timestamp + 10000)   // 请求后10秒
+        ]
+      );
+    }
+
+    // 方案3: 终极兜底 - 如果前两个方案都失败,直接查询该用户最新的记录(不考虑时间)
+    if (rows.length === 0 && cacheData.userId !== 'anonymous') {
+      console.log(`[ResponseInterceptor] IP查询也失败,使用终极兜底查询: user=${cacheData.userId}`);
+      [rows] = await pool.query(
+        `SELECT cl.conversation_id, cl.request_id, r.timestamp FROM conversation_logs cl
+         JOIN requests r ON cl.request_id = r.id
+         WHERE r.user_id = ?
+         ORDER BY cl.conversation_id DESC LIMIT 1`,
+        [cacheData.userId]
+      );
+
+      // 如果找到记录,检查时间差是否合理(不超过1分钟)
+      if (rows.length > 0) {
+        const timeDiff = Math.abs(new Date(rows[0].timestamp) - cacheData.timestamp);
+        if (timeDiff > 60000) { // 超过1分钟
+          console.log(`[ResponseInterceptor] ⚠️  终极兜底找到记录但时间差过大: ${Math.round(timeDiff/1000)}秒,放弃更新`);
+          rows = []; // 清空结果,放弃更新
+        }
+      }
+    }
 
     if (rows.length > 0) {
       const conversationId = rows[0].conversation_id;
+      const requestId = rows[0].request_id;
 
       // 更新conversation_logs记录，添加AI回答
       await pool.query(
@@ -234,15 +293,15 @@ async function updateConversationWithResponse(requestKey, aiResponse) {
         [JSON.stringify(fullConversation), conversationId]
       );
 
-      console.log(`✓ 已更新对话记录 ID:${conversationId}，添加AI回答 (${aiResponse.length}字符)`);
+      console.log(`[ResponseInterceptor] ✓ 已更新对话记录 ID:${conversationId} (request:${requestId}), AI回答: ${aiResponse.length}字符`);
     } else {
-      console.log(`未找到匹配的对话记录: ${requestKey}`);
+      console.log(`[ResponseInterceptor] ⚠️  未找到匹配的对话记录: ${requestKey} (user:${cacheData.userId}, ip:${cacheData.userIp})`);
     }
 
     // 清理缓存
     responseCache.delete(requestKey);
   } catch (error) {
-    console.error('更新对话记录失败:', error);
+    console.error('[ResponseInterceptor] 更新对话记录失败:', error);
   }
 }
 
@@ -271,14 +330,20 @@ module.exports = function responseInterceptorMiddleware(req, res, next) {
 
   // 生成请求键并缓存请求数据
   const requestKey = generateRequestKey(req);
-  const userId = req.headers['x-user-id'] || req.body.user || 'anonymous';
+  const rawUserId = req.headers['x-user-id'] || req.body.user || 'anonymous';
+  const userId = normalizeUserId(rawUserId);
+  const userIp = req.headers['x-user-ip'] || req.body.user_ip || req.ip;
 
-  responseCache.set(requestKey, {
+  const cacheData = {
     userId,
+    userIp,
     messages: req.body.messages || req.body.contents || (req.body.prompt ? [{ role: 'user', content: req.body.prompt }] : []),
     timestamp: Date.now(),
     route
-  });
+  };
+
+  responseCache.set(requestKey, cacheData);
+  console.log(`[ResponseInterceptor] 📝 缓存请求: key=${requestKey}, user=${userId}, ip=${userIp}, messages=${cacheData.messages.length}`);
 
   // 拦截响应
   const originalWrite = res.write;
@@ -301,12 +366,16 @@ module.exports = function responseInterceptorMiddleware(req, res, next) {
     if (responseData && res.statusCode === 200) {
       const aiResponse = parseAIResponse(responseData, route);
       if (aiResponse) {
+        console.log(`[ResponseInterceptor] 🤖 解析AI响应: key=${requestKey}, 长度=${aiResponse.length}字符`);
         // 异步更新数据库，不阻塞响应
         setImmediate(() => {
           updateConversationWithResponse(requestKey, aiResponse);
         });
+      } else {
+        console.log(`[ResponseInterceptor] ⚠️  无法解析AI响应: key=${requestKey}, route=${route}, status=${res.statusCode}`);
       }
     } else {
+      console.log(`[ResponseInterceptor] ❌ 请求失败: key=${requestKey}, status=${res.statusCode}`);
       // 请求失败时清理缓存
       responseCache.delete(requestKey);
     }

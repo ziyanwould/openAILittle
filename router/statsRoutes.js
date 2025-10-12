@@ -157,17 +157,61 @@ router.get('/stats/restricted-usage', async (req, res) => {
     }
 });
 
-// 新增：获取对话历史
+// 新增：获取对话历史 (支持匿名用户IP追踪)
 router.get('/request/:id/conversation-logs', async (req, res) => {
   try {
-    const query = `
-      SELECT cl.*, r.content 
-      FROM conversation_logs cl
-      LEFT JOIN requests r ON cl.request_id = r.id
-      WHERE cl.request_id = ?
+    // 第一步:查询请求详情,判断是否为匿名用户
+    const requestQuery = `
+      SELECT r.id, r.user_id, r.ip, u.is_anonymous
+      FROM requests r
+      LEFT JOIN users u ON r.user_id = u.id
+      WHERE r.id = ?
     `;
-    const [rows] = await pool.query(query, [req.params.id]);
-    res.json({ data: rows });
+    const [requestRows] = await pool.query(requestQuery, [req.params.id]);
+
+    if (requestRows.length === 0) {
+      return res.status(404).json({ error: '请求记录不存在' });
+    }
+
+    const request = requestRows[0];
+    let conversationQuery;
+    let queryParams;
+
+    // 第二步:根据是否匿名用户选择不同的查询策略
+    if (request.is_anonymous) {
+      // 匿名用户:通过IP地址查询相关对话历史 (限制50条)
+      conversationQuery = `
+        SELECT cl.*, r.content, r.id as request_id_ref
+        FROM conversation_logs cl
+        LEFT JOIN requests r ON cl.request_id = r.id
+        WHERE r.ip = ?
+        ORDER BY cl.created_at DESC
+        LIMIT 50
+      `;
+      queryParams = [request.ip];
+    } else {
+      // 普通用户:通过request_id查询
+      conversationQuery = `
+        SELECT cl.*, r.content
+        FROM conversation_logs cl
+        LEFT JOIN requests r ON cl.request_id = r.id
+        WHERE cl.request_id = ?
+        ORDER BY cl.created_at DESC
+      `;
+      queryParams = [req.params.id];
+    }
+
+    const [rows] = await pool.query(conversationQuery, queryParams);
+
+    res.json({
+      data: rows,
+      track_info: {
+        is_anonymous: Boolean(request.is_anonymous),
+        track_type: request.is_anonymous ? 'IP' : 'USER_ID',
+        tracked_value: request.is_anonymous ? request.ip : request.user_id,
+        result_count: rows.length
+      }
+    });
   } catch (error) {
     console.error('获取对话历史失败:', error);
     res.status(500).json({ error: '服务器内部错误' });
@@ -560,11 +604,11 @@ router.get('/stats/moderation-overview', async (req, res) => {
 
     res.json({
       data: {
-        today_total: today_total || 0,
-        today_violations: today_violations || 0,
-        week_total: week_total || 0,
-        banned_count: banned_count || 0,
-        today_violation_rate: today_total > 0 ? ((today_violations / today_total) * 100).toFixed(2) : 0,
+        today_total: Number(today_total || 0),
+        today_violations: Number(today_violations || 0),
+        week_total: Number(week_total || 0),
+        banned_count: Number(banned_count || 0),
+        today_violation_rate: today_total > 0 ? Number(((today_violations / today_total) * 100).toFixed(2)) : 0,
         risk_distribution: riskDistribution[0] || []
       }
     });
@@ -598,9 +642,9 @@ router.get('/stats/moderation-trends', async (req, res) => {
     res.json({
       data: rows.map(row => ({
         date: row.date,
-        total_count: row.total_count || 0,
-        violation_count: row.violation_count || 0,
-        violation_rate: row.violation_rate || 0
+        total_count: Number(row.total_count || 0),
+        violation_count: Number(row.violation_count || 0),
+        violation_rate: Number(row.violation_rate || 0)
       }))
     });
   } catch (error) {
@@ -738,9 +782,9 @@ router.get('/stats/model-violations', async (req, res) => {
       data: rows.map(row => ({
         model: row.model || '未知',
         route: row.route || '未知',
-        total_count: row.total_count || 0,
-        violation_count: row.violation_count || 0,
-        violation_rate: row.violation_rate || 0
+        total_count: Number(row.total_count || 0),
+        violation_count: Number(row.violation_count || 0),
+        violation_rate: Number(row.violation_rate || 0)
       }))
     });
   } catch (error) {
