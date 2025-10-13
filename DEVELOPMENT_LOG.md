@@ -1,7 +1,7 @@
 # OpenAI Little - 开发记录文档
 
-> **更新时间**: 2025-10-13
-> **版本**: 1.10.1 (会话追踪修复 + 多模态响应识别)
+> **更新时间**: 2025-10-14
+> **版本**: 1.10.2 (控制台日志面板 + 日志轮换)
 > **作者**: Liu Jiarong  
 
 ## 🏗️ 项目架构概览
@@ -316,6 +316,34 @@ grep "Content Moderation" logs/app.log  # 过滤审查日志
 - `4291-4299` - 各种限流策略触发
 
 ## 🆕 更新日志
+
+### 2025-10-14 - v1.10.2 控制台日志可视化 + 日志轮换
+
+#### ✨ 新增功能
+- **实时控制台日志面板**：前端新增「系统日志」页面 (`SystemLogsView.vue`)，支持级别筛选（info/warn/error/debug）、动态条数调节以及 5 秒自动刷新，显式展示 `console` 输出与进程信息。
+- **统计服务日志 API**：`GET /api/logs/console` 返回最近日志，包含时间戳、级别、来源、PID、消息文本，便于统一监控与审计。
+- **日志采集器**：在主服务与统计服务中注入 `lib/logCollector.js`，接管 `console` 系列方法，写入结构化 JSON 行并保存在 `logs/console.log`。
+
+#### 🔄 日志生命周期管理
+- 设置单文件上限 **1GB**（满足大容量磁盘场景），写入前检查并自动触发轮换。
+- 保留最多 **5 个历史切片** (`console.log.1`…`console.log.5`)，旧文件顺次平移；新增 `.gitignore` 条目避免日志被误提交。
+- 内置内存兜底队列（最新 500 条）用于文件读取失败时的紧急回退。
+
+#### 🛠️ 代码改动
+- **后端**
+  - `lib/logCollector.js`：新增结构化日志写入、日志轮换、来源标识与读取工具函数。
+  - `index.js`、`statsServer.js`：注册日志采集器并标记进程来源（main-service / stats-service）。
+  - `router/statsRoutes.js`：追加 `/logs/console` 路由。
+- **前端**
+  - `src/api/index.js`：封装 `getConsoleLogs`。
+  - `src/router.js`、`src/App.vue`：新增「系统日志」导航与面包屑。
+  - `src/views/SystemLogsView.vue`：实现页面 UI。
+
+#### ✅ 验证
+- 命令行注入 `console.log('hello log test')` 验证采集与轮换写入正确。
+- 手动调用 `/api/logs/console`，返回 JSON 正常；前端页面能按级别刷新并滚动至最新。
+
+---
 
 ### 2025-10-12 - v1.10.0 🎉 对话会话管理优化 + 智能合并存储
 
