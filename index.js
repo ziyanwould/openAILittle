@@ -75,6 +75,14 @@ const app = express();
 
 app.use(bodyParser.json({ limit: '100mb' }));
 
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    service: 'main',
+    time: new Date().toISOString()
+  });
+});
+
 // 为辅助模型设置限流配置
 auxiliaryModels.forEach(model => {
   modelRateLimits[model] = {

@@ -24,6 +24,14 @@ const statsApp = express();
 statsApp.use(cors()); // 允许跨域访问统计接口
 statsApp.use(express.json());
 
+statsApp.get('/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    service: 'stats',
+    time: new Date().toISOString()
+  });
+});
+
 // 路由挂载
 statsApp.use('/api', statsRoutes);
 

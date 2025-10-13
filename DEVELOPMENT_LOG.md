@@ -320,9 +320,11 @@ grep "Content Moderation" logs/app.log  # 过滤审查日志
 ### 2025-10-14 - v1.10.2 控制台日志可视化 + 日志轮换
 
 #### ✨ 新增功能
-- **实时控制台日志面板**：前端新增「系统日志」页面 (`SystemLogsView.vue`)，支持级别筛选（info/warn/error/debug）、动态条数调节以及 5 秒自动刷新，显式展示 `console` 输出与进程信息。
+- **实时控制台日志面板**：前端新增「系统日志」页面 (`SystemLogsView.vue`)，支持级别筛选（info/warn/error/debug）、关键字搜索、动态条数调节以及 5 秒自动刷新，直观展示 `console` 输出与进程信息。
+- **使用情况导出**：`UsageTable.vue` 新增「导出 CSV」按钮，可基于筛选条件一键导出请求明细，便于线下排查与归档。
+- **首页概览卡片**：`StatsOverviewCards.vue` 汇总累计请求、会话总数、今日活跃用户与今日违规拦截等关键指标，为运营提供“开箱即用”的可视化看板。
 - **统计服务日志 API**：`GET /api/logs/console` 返回最近日志，包含时间戳、级别、来源、PID、消息文本，便于统一监控与审计。
-- **日志采集器**：在主服务与统计服务中注入 `lib/logCollector.js`，接管 `console` 系列方法，写入结构化 JSON 行并保存在 `logs/console.log`。
+- **健康检查接口**：主服务与统计服务分别提供 `GET /health`，用于监控探测与自动化告警。
 
 #### 🔄 日志生命周期管理
 - 设置单文件上限 **1GB**（满足大容量磁盘场景），写入前检查并自动触发轮换。
@@ -332,12 +334,14 @@ grep "Content Moderation" logs/app.log  # 过滤审查日志
 #### 🛠️ 代码改动
 - **后端**
   - `lib/logCollector.js`：新增结构化日志写入、日志轮换、来源标识与读取工具函数。
-  - `index.js`、`statsServer.js`：注册日志采集器并标记进程来源（main-service / stats-service）。
+  - `index.js`、`statsServer.js`：注册日志采集器、暴露 `/health`，并标记进程来源（main-service / stats-service）。
   - `router/statsRoutes.js`：追加 `/logs/console` 路由。
 - **前端**
   - `src/api/index.js`：封装 `getConsoleLogs`。
   - `src/router.js`、`src/App.vue`：新增「系统日志」导航与面包屑。
-  - `src/views/SystemLogsView.vue`：实现页面 UI。
+  - `src/views/SystemLogsView.vue`：实现页面 UI 与关键字过滤。
+  - `src/components/UsageTable.vue`：新增 CSV 导出与筛选字段初始化。
+  - `src/components/StatsOverviewCards.vue`、`src/views/Home.vue`：构建首页概览卡片并纳入布局。
 
 #### ✅ 验证
 - 命令行注入 `console.log('hello log test')` 验证采集与轮换写入正确。
