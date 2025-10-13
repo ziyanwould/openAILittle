@@ -115,7 +115,7 @@ function isTimestamp(str) {
     return /^\d+$/.test(str) && str.length >= 10 && str.length <= 13;
 }
 
-module.exports = function (req, res, next) {
+module.exports = async function (req, res, next) {
   const userId = req.headers['x-user-id'] || req.body.user;
   const userIP = req.headers['x-user-ip'] || req.body.user_ip || req.ip;
   const authHeader = req.headers.authorization || '';
@@ -126,15 +126,22 @@ module.exports = function (req, res, next) {
     // 扩展请求对象
     req._logContext = { user: userId, ip: userIP, token };
 
-     prepareLogData(req) // 异步处理
-      .then(async (logData) => {
-        //   try{
-            await findOrCreateUser(logData.user_id);
-            logger.enqueue(logData); //仍然使用lib/logger.js
-      })
-      .catch((err) => {
-        console.error('日志预处理失败:', err);
-      });
+    try {
+      // 🆕 v1.10.0修复: 同步获取 conversation_id 并传递给后续中间件
+      const logData = await prepareLogData(req);
+
+      // 🔑 关键修复: 将会话ID附加到req对象，供 responseInterceptorMiddleware 使用
+      req._conversationId = logData.conversation_id;
+      req._isNewConversation = logData.is_new_conversation;
+
+      // 异步写入数据库（不阻塞后续流程）
+      findOrCreateUser(logData.user_id)
+        .then(() => logger.enqueue(logData))
+        .catch((err) => console.error('[LoggingMiddleware] 日志入库失败:', err));
+    } catch (err) {
+      console.error('[LoggingMiddleware] 日志预处理失败:', err);
+      // 即使失败也继续处理请求
+    }
   }
 
   next();

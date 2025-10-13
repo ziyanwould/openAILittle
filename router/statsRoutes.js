@@ -41,7 +41,7 @@ function buildFilterQuery(params, forCount = false) {
   return query;
 }
 
-// 使用统计接口 (支持分页)
+// 使用统计接口 (支持分页 + v1.10.0会话分组优化)
 router.get('/stats/usage', async (req, res) => {
     const { page = 1, pageSize = 10, ...otherParams } = req.query;
     const offset = (page - 1) * pageSize;
@@ -50,14 +50,26 @@ router.get('/stats/usage', async (req, res) => {
         const countQuery = buildFilterQuery(otherParams, true);  // 先查询符合条件的总数，true表示查询数量
         const [[{ total }]] = await pool.query(countQuery);   // 使用解构赋值获取total
 
-        // 再进行分页数据查询
-        let dataQuery = buildFilterQuery(otherParams);   //查询具体数据
-        dataQuery += ` LIMIT ${pageSize} OFFSET ${offset}`;  // 添加分页
+        // 🆕 v1.10.0优化: 使用窗口函数添加会话分组信息
+        const baseQuery = buildFilterQuery(otherParams).replace('SELECT *',
+          `SELECT r.*,
+           SUBSTRING(r.conversation_id, 1, 8) as conversation_short_id,
+           COUNT(*) OVER (PARTITION BY r.conversation_id) as conversation_request_count,
+           ROW_NUMBER() OVER (PARTITION BY r.conversation_id ORDER BY r.id ASC) as conversation_order`
+        ).replace('FROM requests', 'FROM requests r');
 
+        const dataQuery = `${baseQuery} LIMIT ${pageSize} OFFSET ${offset}`;
         const [rows] = await pool.query(dataQuery);
 
+        // 🆕 处理会话角色标识 (主请求/子请求)
+        const processedRows = rows.map(row => ({
+          ...row,
+          conversation_role: row.conversation_order === 1 ? 'main' : 'child',
+          is_conversation_main: row.conversation_order === 1
+        }));
+
         res.json({
-            data: rows,    // 当前页数据
+            data: processedRows,    // 当前页数据（包含会话分组信息）
             total: total,  // 符合条件的总数
             page: parseInt(page),
             pageSize: parseInt(pageSize)
@@ -157,12 +169,12 @@ router.get('/stats/restricted-usage', async (req, res) => {
     }
 });
 
-// 新增：获取对话历史 (支持匿名用户IP追踪)
+// 新增：获取对话历史 (支持匿名用户IP追踪 + v1.10.0会话管理 + 本次请求详情)
 router.get('/request/:id/conversation-logs', async (req, res) => {
   try {
-    // 第一步:查询请求详情,判断是否为匿名用户
+    // 第一步:查询请求详情,获取conversation_id和本次请求内容
     const requestQuery = `
-      SELECT r.id, r.user_id, r.ip, u.is_anonymous
+      SELECT r.*, u.is_anonymous
       FROM requests r
       LEFT JOIN users u ON r.user_id = u.id
       WHERE r.id = ?
@@ -177,9 +189,18 @@ router.get('/request/:id/conversation-logs', async (req, res) => {
     let conversationQuery;
     let queryParams;
 
-    // 第二步:根据是否匿名用户选择不同的查询策略
-    if (request.is_anonymous) {
-      // 匿名用户:通过IP地址查询相关对话历史 (限制50条)
+    // 🆕 v1.10.0优化: 优先通过conversation_id查询
+    if (request.conversation_id) {
+      conversationQuery = `
+        SELECT cl.*, r.content
+        FROM conversation_logs cl
+        LEFT JOIN requests r ON cl.conversation_uuid = r.conversation_id
+        WHERE cl.conversation_uuid = ?
+        ORDER BY cl.created_at DESC
+      `;
+      queryParams = [request.conversation_id];
+    } else if (request.is_anonymous) {
+      // 兜底策略1: 匿名用户通过IP地址查询相关对话历史 (限制50条)
       conversationQuery = `
         SELECT cl.*, r.content, r.id as request_id_ref
         FROM conversation_logs cl
@@ -190,7 +211,7 @@ router.get('/request/:id/conversation-logs', async (req, res) => {
       `;
       queryParams = [request.ip];
     } else {
-      // 普通用户:通过request_id查询
+      // 兜底策略2: 普通用户通过request_id查询 (兼容旧数据)
       conversationQuery = `
         SELECT cl.*, r.content
         FROM conversation_logs cl
@@ -203,12 +224,39 @@ router.get('/request/:id/conversation-logs', async (req, res) => {
 
     const [rows] = await pool.query(conversationQuery, queryParams);
 
+    // 🆕 v1.10.0优化: 解析本次请求的消息内容
+    let currentRequestMessages = [];
+    try {
+      if (request.content) {
+        const parsedContent = typeof request.content === 'string' ? JSON.parse(request.content) : request.content;
+        if (Array.isArray(parsedContent)) {
+          currentRequestMessages = parsedContent;
+        } else if (parsedContent.messages && Array.isArray(parsedContent.messages)) {
+          currentRequestMessages = parsedContent.messages;
+        }
+      }
+    } catch (e) {
+      console.error('解析请求内容失败:', e);
+    }
+
     res.json({
       data: rows,
+      current_request: {
+        id: request.id,
+        user_id: request.user_id,
+        ip: request.ip,
+        model: request.model,
+        route: request.route,
+        is_restricted: Boolean(request.is_restricted),
+        timestamp: request.timestamp,
+        conversation_id: request.conversation_id,
+        messages: currentRequestMessages,  // 🆕 本次请求的具体消息内容
+        content_preview: request.content ? String(request.content).substring(0, 200) : ''
+      },
       track_info: {
         is_anonymous: Boolean(request.is_anonymous),
-        track_type: request.is_anonymous ? 'IP' : 'USER_ID',
-        tracked_value: request.is_anonymous ? request.ip : request.user_id,
+        track_type: request.conversation_id ? 'CONVERSATION_ID' : (request.is_anonymous ? 'IP' : 'REQUEST_ID'),
+        tracked_value: request.conversation_id || (request.is_anonymous ? request.ip : request.user_id),
         result_count: rows.length
       }
     });

@@ -43,8 +43,11 @@ function normalizeUserId(userId) {
  * 生成请求唯一标识符 (v1.10.0优化: 优先使用 conversation_id)
  */
 function generateRequestKey(req) {
-  // 🆕 优先使用 conversation_id 作为缓存键
-  const conversationId = req.headers['x-conversation-id'] || req.body.conversation_id;
+  // 🆕 v1.10.0修复: 优先级1 - 从前置中间件获取 (loggingMiddleware传递)
+  const conversationId = req._conversationId
+    || req.headers['x-conversation-id']  // 优先级2 - 前端传递header
+    || req.body.conversation_id;         // 优先级3 - 前端传递body
+
   if (conversationId) {
     return conversationId;
   }
@@ -368,8 +371,10 @@ module.exports = function responseInterceptorMiddleware(req, res, next) {
   const userId = normalizeUserId(rawUserId);
   const userIp = req.headers['x-user-ip'] || req.body.user_ip || req.ip;
 
-  // 🆕 v1.10.0: 获取 conversation_id (如果存在)
-  const conversationId = req.headers['x-conversation-id'] || req.body.conversation_id;
+  // 🆕 v1.10.0修复: 获取 conversation_id (优先从前置中间件获取)
+  const conversationId = req._conversationId  // 优先级1 - loggingMiddleware传递
+    || req.headers['x-conversation-id']       // 优先级2 - 前端传递header
+    || req.body.conversation_id;              // 优先级3 - 前端传递body
 
   const cacheData = {
     userId,
