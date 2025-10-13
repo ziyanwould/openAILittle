@@ -13,6 +13,7 @@ const {
   setConciseModeConfig
 } = require('../db');
 const { getModelWhitelists, setModelWhitelist, resetModelWhitelists } = require('../db');
+const logCollector = require('../lib/logCollector');
 
 // 基础查询构建器 (添加分页参数)
 function buildFilterQuery(params, forCount = false) {
@@ -2435,6 +2436,23 @@ router.post('/stats/model-whitelists/reset', async (req, res) => {
     res.json({ success: true });
   } catch (error) {
     console.error('重置模型白名单失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+// ==================== 控制台日志 API ====================
+router.get('/logs/console', async (req, res) => {
+  try {
+    const { limit, level, since } = req.query;
+    const logs = await logCollector.getLogs({ limit, level, since });
+    res.json({
+      success: true,
+      data: logs,
+      total: logs.length,
+      latestTimestamp: logs.length ? logs[logs.length - 1].timestamp : null
+    });
+  } catch (error) {
+    console.error('读取控制台日志失败:', error);
     res.status(500).json({ error: '服务器内部错误' });
   }
 });

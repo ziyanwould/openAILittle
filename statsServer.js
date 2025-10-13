@@ -9,6 +9,9 @@
  * @Copyright (c) 2025 by ${git_name_email}, All Rights Reserved. 
  */
 // statsServer.js
+const logCollector = require('./lib/logCollector');
+logCollector.setSource('stats-service');
+
 const express = require('express');
 const { pool } = require('./db');
 const cors = require('cors');  // 按需安装

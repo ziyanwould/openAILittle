@@ -9,6 +9,9 @@
  * @Copyright (c) 2024 by ${git_name_email}, All Rights Reserved. 
  */
 
+const logCollector = require('./lib/logCollector');
+logCollector.setSource('main-service');
+
 const express = require('express');
 const { createProxyMiddleware, fixRequestBody } = require('http-proxy-middleware');
 const rateLimit = require('express-rate-limit');
