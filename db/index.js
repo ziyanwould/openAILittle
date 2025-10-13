@@ -342,6 +342,17 @@ async function initializeDatabase() {
         console.log('⭕ conversation_logs.updated_at 字段已存在');
       }
 
+      // 添加 route 字段 (用于会话边界判断 - 可选)
+      if (!existingConvColumns.includes('route')) {
+        await connection.query(`
+          ALTER TABLE conversation_logs
+          ADD COLUMN route VARCHAR(50) DEFAULT NULL COMMENT '请求路由(可选)' AFTER ip
+        `);
+        console.log('✓ conversation_logs.route 字段添加成功');
+      } else {
+        console.log('⭕ conversation_logs.route 字段已存在');
+      }
+
       // 将 request_id 改为可选 (保留兼容性)
       const [requestIdColumn] = await connection.query(`
         SELECT IS_NULLABLE
