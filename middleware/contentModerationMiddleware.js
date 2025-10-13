@@ -12,6 +12,78 @@ const moment = require('moment');
 const crypto = require('crypto');
 const { logModerationResult, checkUserIpBanStatus, updateViolationCount, findOrCreateUser } = require('../db/index');
 
+const TEXT_KEYS = new Set([
+  'text',
+  'content',
+  'value',
+  'input',
+  'prompt',
+  'message',
+  'messages',
+  'body',
+  'title',
+  'description',
+  'summary',
+  'input_text',
+  'raw_text'
+]);
+
+function collectTextSegments(value, options = {}) {
+  const {
+    maxDepth = 5,
+    trim = true
+  } = options;
+
+  const segments = [];
+  const visited = new WeakSet();
+
+  const traverse = (node, depth) => {
+    if (node === null || node === undefined) {
+      return;
+    }
+
+    if (typeof node === 'string') {
+      const text = trim ? node.trim() : node;
+      if (text) {
+        segments.push(text);
+      }
+      return;
+    }
+
+    if (depth >= maxDepth) {
+      return;
+    }
+
+    if (Array.isArray(node)) {
+      node.forEach(item => traverse(item, depth + 1));
+      return;
+    }
+
+    if (typeof node === 'object') {
+      if (visited.has(node)) {
+        return;
+      }
+      visited.add(node);
+
+      Object.entries(node).forEach(([key, val]) => {
+        if (typeof val === 'string') {
+          if (TEXT_KEYS.has(key) || depth === 0) {
+            const text = trim ? val.trim() : val;
+            if (text) {
+              segments.push(text);
+            }
+          }
+        } else if (Array.isArray(val) || (val && typeof val === 'object')) {
+          traverse(val, depth + 1);
+        }
+      });
+    }
+  };
+
+  traverse(value, 0);
+  return segments;
+}
+
 class ContentModerationMiddleware {
   constructor() {
     // 使用文件配置（运行时通过文件热更新）
@@ -24,31 +96,42 @@ class ContentModerationMiddleware {
    * 从请求体中提取需要审查的文本内容
    */
   extractContentFromBody(body) {
-    let contents = [];
-    
     if (!body || typeof body !== 'object') {
-      return contents;
+      return '';
     }
 
-    // 提取直接字段（字符串）
+    const segments = new Set();
+
+    // 提取直接字段（字符串或复杂结构）
     this.config.contentExtraction.fields.forEach(field => {
-      if (body[field] && typeof body[field] === 'string') {
-        contents.push(body[field]);
+      if (body[field] !== undefined) {
+        collectTextSegments(body[field]).forEach(text => segments.add(text));
       }
     });
 
     // 提取嵌套字段（如 messages 数组中的 content 文本）
     Object.entries(this.config.contentExtraction.nestedFields).forEach(([parentField, childField]) => {
-      if (body[parentField] && Array.isArray(body[parentField])) {
-        body[parentField].forEach(item => {
-          if (item && item[childField] && typeof item[childField] === 'string') {
-            contents.push(item[childField]);
+      const parentValue = body[parentField];
+      if (Array.isArray(parentValue)) {
+        parentValue.forEach(item => {
+          if (!item) return;
+          if (childField in item) {
+            collectTextSegments(item[childField]).forEach(text => segments.add(text));
           }
         });
+      } else if (parentValue && typeof parentValue === 'object') {
+        // 支持嵌套对象（如 conversation: { messages: [...] })
+        const nestedValue = parentValue[childField];
+        if (nestedValue !== undefined) {
+          collectTextSegments(nestedValue).forEach(text => segments.add(text));
+        }
       }
     });
 
-    const combinedContent = contents.join('\n').slice(0, this.config.contentExtraction.maxLength);
+    const combinedContent = Array.from(segments)
+      .join('\n')
+      .slice(0, this.config.contentExtraction.maxLength);
+
     return combinedContent.trim();
   }
 
