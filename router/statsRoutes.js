@@ -194,7 +194,7 @@ router.get('/request/:id/conversation-logs', async (req, res) => {
       conversationQuery = `
         SELECT cl.*, r.content
         FROM conversation_logs cl
-        LEFT JOIN requests r ON cl.conversation_uuid = r.conversation_id
+        LEFT JOIN requests r ON cl.last_request_id = r.id
         WHERE cl.conversation_uuid = ?
         ORDER BY cl.created_at DESC
       `;
@@ -228,15 +228,39 @@ router.get('/request/:id/conversation-logs', async (req, res) => {
     let currentRequestMessages = [];
     try {
       if (request.content) {
-        const parsedContent = typeof request.content === 'string' ? JSON.parse(request.content) : request.content;
-        if (Array.isArray(parsedContent)) {
-          currentRequestMessages = parsedContent;
-        } else if (parsedContent.messages && Array.isArray(parsedContent.messages)) {
-          currentRequestMessages = parsedContent.messages;
+        let parsedContent = request.content;
+
+        if (typeof request.content === 'string') {
+          const trimmed = request.content.trim();
+          if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+            parsedContent = JSON.parse(trimmed);
+          } else if (trimmed) {
+            currentRequestMessages = [{ role: 'user', content: trimmed }];
+          }
+        }
+
+        if (!currentRequestMessages.length) {
+          if (Array.isArray(parsedContent)) {
+            currentRequestMessages = parsedContent;
+          } else if (parsedContent && Array.isArray(parsedContent.messages)) {
+            currentRequestMessages = parsedContent.messages;
+          }
         }
       }
     } catch (e) {
       console.error('解析请求内容失败:', e);
+    }
+
+    // 如果依旧无法获取消息内容，兜底使用会话日志中的消息
+    if ((!currentRequestMessages || currentRequestMessages.length === 0) && rows.length > 0 && rows[0].messages) {
+      try {
+        const messagesFromLog = Array.isArray(rows[0].messages) ? rows[0].messages : JSON.parse(rows[0].messages);
+        if (Array.isArray(messagesFromLog)) {
+          currentRequestMessages = messagesFromLog;
+        }
+      } catch (parseErr) {
+        console.error('兜底解析会话日志失败:', parseErr);
+      }
     }
 
     res.json({

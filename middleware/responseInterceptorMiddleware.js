@@ -103,129 +103,225 @@ function extractUserMessage(body) {
   return userMessage;
 }
 
+function normalizeGeneratedImages(items = []) {
+  if (!Array.isArray(items)) {
+    items = [items];
+  }
+
+  return items
+    .map((item, index) => {
+      if (!item) {
+        return null;
+      }
+
+      if (typeof item === 'string') {
+        const trimmed = item.trim();
+        if (!trimmed) {
+          return null;
+        }
+        if (/^https?:\/\//i.test(trimmed) || trimmed.startsWith('data:')) {
+          return { url: trimmed, index };
+        }
+        return { url: `data:image/png;base64,${trimmed}`, index, mime: 'image/png' };
+      }
+
+      if (item.url) {
+        return { url: item.url, index, mime: item.mime_type || item.mime || null };
+      }
+
+      if (item.image_url) {
+        if (typeof item.image_url === 'string') {
+          return { url: item.image_url, index, mime: item.mime_type || null };
+        }
+
+        if (item.image_url.url) {
+          return {
+            url: item.image_url.url,
+            index,
+            mime: item.image_url.mime_type || item.image_url.mime || null
+          };
+        }
+      }
+
+      const base64 = item.b64_json || item.base64 || item.image_base64;
+      if (base64) {
+        const mime = item.mime_type || item.mime || 'image/png';
+        return { url: `data:${mime};base64,${base64}`, index, mime };
+      }
+
+      if (item.data) {
+        if (typeof item.data === 'string') {
+          return { url: item.data, index };
+        }
+
+        if (item.data.url) {
+          return { url: item.data.url, index };
+        }
+
+        if (item.data.b64_json) {
+          const mime = item.data.mime_type || 'image/png';
+          return { url: `data:${mime};base64,${item.data.b64_json}`, index, mime };
+        }
+      }
+
+      return null;
+    })
+    .filter(Boolean);
+}
+
 /**
  * 解析AI响应内容
  */
 function parseAIResponse(data, route) {
   try {
-    // 处理流式响应
-    if (data.includes('data: ') && data.includes('\n')) {
+    const isStreamPayload = data.includes('data: ') && data.includes('\n');
+
+    if (isStreamPayload) {
       const lines = data.split('\n').filter(line => line.trim());
-      let fullContent = '';
+      const textSegments = [];
+      const imageSegments = [];
 
       for (const line of lines) {
-        if (line.startsWith('data: ') && !line.includes('[DONE]')) {
-          try {
-            const jsonStr = line.substring(6); // 去除 'data: ' 前缀
-            const chunk = JSON.parse(jsonStr);
+        if (!line.startsWith('data: ') || line.includes('[DONE]')) {
+          continue;
+        }
 
-            if (route.startsWith('/google') || route.startsWith('/freegemini')) {
-              // Gemini 流式格式
-              if (chunk.candidates && chunk.candidates[0] && chunk.candidates[0].content) {
-                const parts = chunk.candidates[0].content.parts;
-                if (parts && parts[0] && parts[0].text) {
-                  fullContent += parts[0].text;
-                }
-              }
-            } else if (route.startsWith('/cloudflare')) {
-              // Cloudflare AI 流式格式处理 (如果有的话)
-              // Cloudflare AI 图像生成通常不是流式的，但保留扩展性
-              if (chunk.result && chunk.result.image) {
-                fullContent = '[Generated Image]';
-              } else if (chunk.content) {
-                fullContent += chunk.content;
-              }
-            } else if (route.startsWith('/siliconflow')) {
-              // SiliconFlow AI 流式格式处理 (如果有的话)
-              // SiliconFlow 图像生成通常不是流式的，但保留扩展性
-              if (chunk.images && chunk.images.length > 0) {
-                fullContent = '[Generated Image]';
-              } else if (chunk.data && chunk.data.length > 0) {
-                fullContent = '[Generated Images: ' + chunk.data.length + ' items]';
-              } else if (chunk.content) {
-                fullContent += chunk.content;
-              }
-            } else {
-              // OpenAI 流式格式
-              if (chunk.choices && chunk.choices[0] && chunk.choices[0].delta) {
-                const delta = chunk.choices[0].delta;
-                if (delta.content) {
-                  fullContent += delta.content;
-                }
+        try {
+          const chunk = JSON.parse(line.substring(6));
+
+          if (route.startsWith('/google') || route.startsWith('/freegemini')) {
+            const candidate = chunk.candidates && chunk.candidates[0];
+            const parts = candidate && candidate.content && candidate.content.parts;
+            if (parts && parts[0] && parts[0].text) {
+              textSegments.push(parts[0].text);
+            }
+          } else if (chunk.choices && Array.isArray(chunk.choices)) {
+            for (const choice of chunk.choices) {
+              if (choice.delta && choice.delta.content) {
+                textSegments.push(choice.delta.content);
               }
             }
-          } catch (e) {
-            // 忽略解析错误的行
           }
+
+          if (chunk.data && Array.isArray(chunk.data) && chunk.data.length > 0) {
+            imageSegments.push(...chunk.data);
+          } else if (chunk.images && Array.isArray(chunk.images)) {
+            imageSegments.push(...chunk.images);
+          } else if (chunk.output && Array.isArray(chunk.output)) {
+            imageSegments.push(...chunk.output);
+          }
+        } catch (err) {
+          console.error('解析流式响应失败:', err);
         }
       }
 
-      return fullContent.trim();
-    } else {
-      // 处理非流式响应
-      // 检查是否是二进制数据（图片等）
-      if (data.startsWith('\uFFFD') || data.includes('JFIF') || data.includes('PNG')) {
-        // 这是二进制图片数据，不是JSON
-        return '[Generated Image: Binary data]';
+      if (imageSegments.length > 0) {
+        return {
+          type: 'images',
+          items: normalizeGeneratedImages(imageSegments)
+        };
       }
 
-      let response;
-      try {
-        response = JSON.parse(data);
-      } catch (error) {
-        // 如果JSON解析失败，可能是二进制数据或其他格式
-        console.log(`[ResponseInterceptor] Non-JSON response detected for route: ${route}`);
-        return '[Generated Content: Non-JSON response]';
+      if (textSegments.length > 0) {
+        return textSegments.join('');
       }
 
-      if (route.startsWith('/google') || route.startsWith('/freegemini')) {
-        // Gemini 非流式格式
-        if (response.candidates && response.candidates[0] && response.candidates[0].content) {
-          const parts = response.candidates[0].content.parts;
-          if (parts && parts[0] && parts[0].text) {
+      return '';
+    }
+
+    // 非流式响应: 尝试判定是否为二进制数据
+    if (data.startsWith('\uFFFD') || data.includes('JFIF') || data.includes('PNG')) {
+      return '[Generated Image: Binary data]';
+    }
+
+    let response;
+    try {
+      response = JSON.parse(data);
+    } catch (error) {
+      console.log(`[ResponseInterceptor] Non-JSON response detected for route: ${route}`);
+      return data.trim() ? data.trim() : '[Generated Content: Non-JSON response]';
+    }
+
+    const imageSources = [];
+    const collectImages = source => {
+      if (!source) return;
+      if (Array.isArray(source)) {
+        imageSources.push(...source);
+      } else {
+        imageSources.push(source);
+      }
+    };
+
+    collectImages(response.images);
+    collectImages(response.data);
+    collectImages(response.output);
+    collectImages(response.artifacts);
+
+    if (response.result) {
+      collectImages(response.result.images);
+      collectImages(response.result.data);
+      collectImages(response.result.image);
+      collectImages(response.result.image_base64);
+      collectImages(response.result.output);
+    }
+
+    collectImages(response.image);
+    collectImages(response.image_url);
+    collectImages(response.image_base64);
+    collectImages(response.url);
+
+    const normalizedImages = normalizeGeneratedImages(imageSources);
+    if (normalizedImages.length > 0) {
+      return {
+        type: 'images',
+        items: normalizedImages
+      };
+    }
+
+    if (route.startsWith('/google') || route.startsWith('/freegemini')) {
+      if (response.candidates && response.candidates[0] && response.candidates[0].content) {
+        const parts = response.candidates[0].content.parts;
+        if (parts && parts[0]) {
+          if (parts[0].text) {
             return parts[0].text;
           }
-        }
-      } else if (route.startsWith('/cloudflare')) {
-        // Cloudflare AI 非流式格式
-        if (response.success && response.result) {
-          if (response.result.image) {
-            // 图像生成结果
-            return '[Generated Image: Base64 data]';
-          } else if (response.result.text) {
-            // 文本生成结果
-            return response.result.text;
-          } else if (typeof response.result === 'string') {
-            return response.result;
+          if (Array.isArray(parts[0].content)) {
+            const textPart = parts[0].content.find(part => part.text);
+            if (textPart) {
+              return textPart.text;
+            }
           }
-        }
-      } else if (route.startsWith('/siliconflow')) {
-        // SiliconFlow AI 非流式格式
-        if (response.images && response.images.length > 0) {
-          // 图像生成结果（SiliconFlow格式）
-          return `[Generated Images: ${response.images.length} items]`;
-        } else if (response.data && response.data.length > 0) {
-          // 图像生成结果（备用格式）
-          return `[Generated Images: ${response.data.length} items]`;
-        } else if (response.choices && response.choices[0] && response.choices[0].message) {
-          // 文本生成结果（如果SiliconFlow也支持文本生成）
-          return response.choices[0].message.content || '';
-        } else if (response.text) {
-          // 直接文本结果
-          return response.text;
-        }
-      } else {
-        // OpenAI 非流式格式
-        if (response.choices && response.choices[0] && response.choices[0].message) {
-          return response.choices[0].message.content || '';
         }
       }
     }
+
+    if (response.choices && response.choices[0]) {
+      const choice = response.choices[0];
+      if (choice.message && choice.message.content) {
+        return choice.message.content;
+      }
+      if (choice.text) {
+        return choice.text;
+      }
+    }
+
+    if (response.text) {
+      return response.text;
+    }
+
+    if (typeof response.result === 'string') {
+      return response.result;
+    }
+
+    if (response.result && response.result.text) {
+      return response.result.text;
+    }
+
+    return '';
   } catch (error) {
     console.error('解析AI响应失败:', error);
+    return '';
   }
-
-  return '';
 }
 
 /**
@@ -239,16 +335,57 @@ async function updateConversationWithResponse(requestKey, aiResponse) {
   }
 
   try {
-    // 构建完整的对话记录
-    const fullConversation = [...cacheData.messages];
+    const baseConversation = Array.isArray(cacheData.messages)
+      ? cacheData.messages
+      : (cacheData.messages ? [cacheData.messages] : []);
+    const fullConversation = [...baseConversation];
 
-    // 添加AI的回答
-    if (aiResponse && aiResponse.trim()) {
-      const aiMessage = {
-        role: 'assistant',
-        content: aiResponse
-      };
-      fullConversation.push(aiMessage);
+    let messageAppended = false;
+
+    let responseSummary = '结构化数据';
+
+    if (typeof aiResponse === 'string') {
+      const trimmed = aiResponse.trim();
+      if (trimmed) {
+        fullConversation.push({
+          role: 'assistant',
+          content: trimmed
+        });
+        messageAppended = true;
+        responseSummary = `${trimmed.length}字符`;
+      }
+    } else if (aiResponse && aiResponse.type === 'images') {
+      const items = Array.isArray(aiResponse.items) ? aiResponse.items : [];
+      if (items.length > 0) {
+        const validItems = items.filter(item => item && item.url);
+        if (validItems.length > 0) {
+          const contentParts = validItems.map(item => ({
+            type: 'image_url',
+            image_url: {
+              url: item.url,
+              detail: 'auto'
+            }
+          }));
+
+          fullConversation.push({
+            role: 'assistant',
+            content: contentParts,
+            metadata: {
+              response_type: 'images',
+              image_count: validItems.length,
+              images: validItems
+            }
+          });
+          messageAppended = true;
+          responseSummary = `${validItems.length}张图`;
+        }
+      }
+    }
+
+    if (!messageAppended) {
+      console.log(`[ResponseInterceptor] ⚠️  AI响应为空或未解析到有效内容: ${requestKey}`);
+      responseCache.delete(requestKey);
+      return;
     }
 
     // 🆕 v1.10.0: 优先使用 conversation_id 直接更新 (精准、高效)
@@ -259,7 +396,7 @@ async function updateConversationWithResponse(requestKey, aiResponse) {
       );
 
       if (result.affectedRows > 0) {
-        console.log(`[ResponseInterceptor] ✓ 已更新对话 ${cacheData.conversation_id}, AI回答: ${aiResponse.length}字符`);
+        console.log(`[ResponseInterceptor] ✓ 已更新对话 ${cacheData.conversation_id}, AI回答: ${responseSummary}`);
       } else {
         console.log(`[ResponseInterceptor] ⚠️  未找到会话: ${cacheData.conversation_id}`);
       }
@@ -330,7 +467,7 @@ async function updateConversationWithResponse(requestKey, aiResponse) {
         [JSON.stringify(fullConversation), fullConversation.length, conversationUuid]
       );
 
-      console.log(`[ResponseInterceptor] ✓ 已更新对话记录 UUID:${conversationUuid} (request:${requestId}), AI回答: ${aiResponse.length}字符`);
+      console.log(`[ResponseInterceptor] ✓ 已更新对话记录 UUID:${conversationUuid} (request:${requestId}), AI回答: ${responseSummary}`);
     } else {
       console.log(`[ResponseInterceptor] ⚠️  未找到匹配的对话记录: ${requestKey} (user:${cacheData.userId}, ip:${cacheData.userIp})`);
     }
@@ -409,7 +546,12 @@ module.exports = function responseInterceptorMiddleware(req, res, next) {
     if (responseData && res.statusCode === 200) {
       const aiResponse = parseAIResponse(responseData, route);
       if (aiResponse) {
-        console.log(`[ResponseInterceptor] 🤖 解析AI响应: key=${requestKey}, 长度=${aiResponse.length}字符`);
+        const responseSummary = typeof aiResponse === 'string'
+          ? `${aiResponse.length}字符`
+          : aiResponse.type === 'images'
+            ? `${(aiResponse.items || []).length}张图`
+            : '结构化数据';
+        console.log(`[ResponseInterceptor] 🤖 解析AI响应: key=${requestKey}, ${responseSummary}`);
         // 异步更新数据库，不阻塞响应
         setImmediate(() => {
           updateConversationWithResponse(requestKey, aiResponse);

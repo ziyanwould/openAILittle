@@ -1,7 +1,7 @@
 # OpenAI Little - 开发记录文档
 
-> **更新时间**: 2025-10-12
-> **版本**: 1.10.0 (对话会话管理优化 + 存储空间节省55%)
+> **更新时间**: 2025-10-13
+> **版本**: 1.10.1 (会话追踪修复 + 多模态响应识别)
 > **作者**: Liu Jiarong  
 
 ## 🏗️ 项目架构概览
@@ -1376,6 +1376,21 @@ config/
 ---
 
 ## 🚀 版本更新记录
+
+### 2025-10-13 - v1.10.1：会话追踪与图片响应修复
+
+#### 🔧 核心改动
+- `loggingMiddleware.js` 在请求生命周期早期同步写入 `conversation_id` 与会话状态，保障后续中间件复用。
+- `responseInterceptorMiddleware.js` 重构响应解析，统一处理文本与多模态结果，新增 `normalizeGeneratedImages()` 将 SiliconFlow、Cloudflare 等图片生成结果转成标准 `image_url` 数组并写入会话日志。
+- `statsRoutes.js` 的 `/request/:id/conversation-logs` 接口改为使用 `last_request_id` 关联最新请求，并新增多层解析/兜底逻辑，确保“本次请求”可展示完整对话内容。
+
+#### 🐞 缺陷修复
+- 解决请求详情弹窗中会话重复、缺失的问题，修复图片生成请求被渲染为 `[Generated Images]` 的占位文本。
+- 修正匿名/普通用户在缺失 `conversation_id` 场景下的内容回填，避免“暂无对话记录”。
+
+#### 📦 兼容性说明
+- 数据库结构无需迁移，沿用 v1.10.0 既有字段。
+- 删除临时调试文档 `CONVERSATION_MERGE_FIX_PLAN.md`，避免与现行实现冲突。
 
 ### 2025-09-14 - v1.6.0：请求体修改规则管理系统
 
