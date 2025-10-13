@@ -41,25 +41,66 @@ function buildFilterQuery(params, forCount = false) {
   return query;
 }
 
-// 使用统计接口 (支持分页 + v1.10.0会话分组优化)
+// 使用统计接口 (支持按会话分页 + v1.10.1优化)
 router.get('/stats/usage', async (req, res) => {
     const { page = 1, pageSize = 10, ...otherParams } = req.query;
     const offset = (page - 1) * pageSize;
 
     try {
-        const countQuery = buildFilterQuery(otherParams, true);  // 先查询符合条件的总数，true表示查询数量
-        const [[{ total }]] = await pool.query(countQuery);   // 使用解构赋值获取total
+        // 🆕 v1.10.1: 按会话分页策略
+        // 第一步：获取所有符合条件的会话ID（去重并分页）
+        const baseConditions = buildFilterQuery(otherParams, false)
+          .replace('SELECT * FROM requests WHERE 1=1', '')
+          .replace(' ORDER BY timestamp DESC', '');
 
-        // 🆕 v1.10.0优化: 使用窗口函数添加会话分组信息
-        const baseQuery = buildFilterQuery(otherParams).replace('SELECT *',
-          `SELECT r.*,
-           SUBSTRING(r.conversation_id, 1, 8) as conversation_short_id,
-           COUNT(*) OVER (PARTITION BY r.conversation_id) as conversation_request_count,
-           ROW_NUMBER() OVER (PARTITION BY r.conversation_id ORDER BY r.id ASC) as conversation_order`
-        ).replace('FROM requests', 'FROM requests r');
+        // 统计符合条件的会话总数
+        const conversationCountQuery = `
+          SELECT COUNT(DISTINCT COALESCE(conversation_id, CAST(id AS CHAR CHARSET utf8mb4))) as total
+          FROM requests
+          WHERE 1=1 ${baseConditions}
+        `;
+        const [[{ total: conversationTotal }]] = await pool.query(conversationCountQuery);
 
-        const dataQuery = `${baseQuery} LIMIT ${pageSize} OFFSET ${offset}`;
+        // 获取当前页的会话ID列表（按最新时间排序）
+        const conversationIdsQuery = `
+          SELECT COALESCE(conversation_id, CAST(id AS CHAR CHARSET utf8mb4)) as conv_id,
+                 MAX(timestamp) as latest_timestamp
+          FROM requests
+          WHERE 1=1 ${baseConditions}
+          GROUP BY conv_id
+          ORDER BY latest_timestamp DESC
+          LIMIT ${pageSize} OFFSET ${offset}
+        `;
+        const [conversationIds] = await pool.query(conversationIdsQuery);
+
+        if (conversationIds.length === 0) {
+          return res.json({
+            data: [],
+            total: 0,
+            conversationTotal: 0,
+            page: parseInt(page),
+            pageSize: parseInt(pageSize)
+          });
+        }
+
+        // 第二步：获取这些会话的所有请求记录
+        const convIdList = conversationIds.map(c => `'${c.conv_id}'`).join(',');
+        const dataQuery = `
+          SELECT r.*,
+                 SUBSTRING(r.conversation_id, 1, 8) as conversation_short_id,
+                 COUNT(*) OVER (PARTITION BY COALESCE(r.conversation_id, CAST(r.id AS CHAR CHARSET utf8mb4))) as conversation_request_count,
+                 ROW_NUMBER() OVER (PARTITION BY COALESCE(r.conversation_id, CAST(r.id AS CHAR CHARSET utf8mb4)) ORDER BY r.id ASC) as conversation_order
+          FROM requests r
+          WHERE COALESCE(r.conversation_id, CAST(r.id AS CHAR CHARSET utf8mb4)) IN (${convIdList})
+          ORDER BY r.timestamp DESC, r.id ASC
+        `;
         const [rows] = await pool.query(dataQuery);
+
+        // 统计总请求数（用于前端参考）
+        const totalRequestsQuery = `
+          SELECT COUNT(*) as total FROM requests WHERE 1=1 ${baseConditions}
+        `;
+        const [[{ total: totalRequests }]] = await pool.query(totalRequestsQuery);
 
         // 🆕 处理会话角色标识 (主请求/子请求)
         const processedRows = rows.map(row => ({
@@ -69,8 +110,9 @@ router.get('/stats/usage', async (req, res) => {
         }));
 
         res.json({
-            data: processedRows,    // 当前页数据（包含会话分组信息）
-            total: total,  // 符合条件的总数
+            data: processedRows,           // 当前页会话的所有请求记录
+            total: conversationTotal,      // 🆕 会话总数（用于分页）
+            totalRequests: totalRequests,  // 🆕 请求总数（用于显示）
             page: parseInt(page),
             pageSize: parseInt(pageSize)
         });
