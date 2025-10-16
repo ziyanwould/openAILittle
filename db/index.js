@@ -1089,6 +1089,49 @@ async function addSystemConfig(params) {
   }
 }
 
+// 确保默认系统配置存在（若已存在默认项则更新）
+async function ensureDefaultSystemConfig(params) {
+  const {
+    configType,
+    configKey,
+    configValue,
+    description,
+    priority = 100,
+    createdBy = 'SYSTEM_SYNC'
+  } = params;
+
+  try {
+    const [rows] = await pool.query(
+      `SELECT id, is_default FROM system_configs WHERE config_type = ? AND config_key = ?`,
+      [configType, configKey]
+    );
+
+    if (rows.length === 0) {
+      await addSystemConfig({
+        configType,
+        configKey,
+        configValue,
+        description,
+        priority,
+        createdBy,
+        isDefault: true
+      });
+      console.log(`✓ 已补充默认配置: ${configType} - ${configKey}`);
+    } else if (rows[0].is_default) {
+      await pool.query(
+        `
+          UPDATE system_configs
+          SET config_value = ?, description = ?, priority = ?, updated_at = NOW()
+          WHERE id = ?
+        `,
+        [JSON.stringify(configValue), description, priority, rows[0].id]
+      );
+    }
+  } catch (err) {
+    console.error(`确保默认配置失败 (${configType}:${configKey}):`, err.message);
+  }
+}
+
 // 更新系统配置
 async function updateSystemConfig(id, params) {
   const { configValue, description, isActive, priority } = params;
@@ -1147,123 +1190,139 @@ async function resetSystemConfigsToDefaults(configType) {
 // 初始化系统配置（从文件加载）
 async function initializeSystemConfigs() {
   try {
-    const fs = require('fs');
-    const path = require('path');
-    
-    // 检查是否已经初始化过
+    // 检查是否已经存在默认配置
     const [existing] = await pool.query('SELECT COUNT(*) as count FROM system_configs WHERE is_default = TRUE');
-    if (existing[0].count > 0) {
-      console.log('系统配置已初始化，跳过文件加载');
-      return;
-    }
-    
-    // 加载 auxiliaryModels.js
-    try {
-      const auxiliaryModels = require('../modules/auxiliaryModels');
-      for (const model of auxiliaryModels) {
+    const alreadyInitialized = existing[0].count > 0;
+
+    if (alreadyInitialized) {
+      console.log('系统配置已初始化，执行增量同步');
+    } else {
+      // 首次初始化：加载辅助模型、内容审核、限流等默认配置
+      try {
+        const auxiliaryModels = require('../modules/auxiliaryModels');
+        for (const model of auxiliaryModels) {
+          await addSystemConfig({
+            configType: 'AUXILIARY_MODEL',
+            configKey: model,
+            configValue: { enabled: true },
+            description: `辅助模型: ${model}`,
+            createdBy: 'SYSTEM_INIT',
+            priority: 100,
+            isDefault: true
+          });
+        }
+        console.log(`✓ 已初始化 ${auxiliaryModels.length} 个辅助模型配置`);
+      } catch (err) {
+        console.error('加载辅助模型配置失败:', err.message);
+      }
+
+      try {
+        const moderationConfig = require('../modules/moderationConfig');
+
         await addSystemConfig({
-          configType: 'AUXILIARY_MODEL',
-          configKey: model,
-          configValue: { enabled: true },
-          description: `辅助模型: ${model}`,
+          configType: 'MODERATION',
+          configKey: 'global',
+          configValue: moderationConfig.global,
+          description: '内容审核全局配置',
           createdBy: 'SYSTEM_INIT',
-          priority: 100,
+          priority: 1,
           isDefault: true
         });
+
+        for (const [route, config] of Object.entries(moderationConfig.routes)) {
+          await addSystemConfig({
+            configType: 'MODERATION',
+            configKey: route,
+            configValue: config,
+            description: `内容审核路由配置: ${route}`,
+            createdBy: 'SYSTEM_INIT',
+            priority: 10,
+            isDefault: true
+          });
+        }
+
+        console.log(`✓ 已初始化内容审核配置`);
+      } catch (err) {
+        console.error('加载内容审核配置失败:', err.message);
       }
-      console.log(`✓ 已初始化 ${auxiliaryModels.length} 个辅助模型配置`);
-    } catch (err) {
-      console.error('加载辅助模型配置失败:', err.message);
+
+      try {
+        const chatnioRateLimits = require('../modules/chatnioRateLimits');
+
+        await addSystemConfig({
+          configType: 'CHATNIO_LIMIT',
+          configKey: 'commonLimits',
+          configValue: chatnioRateLimits.commonLimits,
+          description: 'ChatNio 公共限制配置',
+          createdBy: 'SYSTEM_INIT',
+          priority: 10,
+          isDefault: true
+        });
+
+        for (const [userIdOrIp, config] of Object.entries(chatnioRateLimits.customLimits)) {
+          await addSystemConfig({
+            configType: 'CHATNIO_LIMIT',
+            configKey: `custom_${userIdOrIp}`,
+            configValue: config,
+            description: `ChatNio 自定义限制: ${userIdOrIp}`,
+            createdBy: 'SYSTEM_INIT',
+            priority: 20,
+            isDefault: true
+          });
+        }
+
+        console.log(`✓ 已初始化 ChatNio 限制配置`);
+      } catch (err) {
+        console.error('加载 ChatNio 限制配置失败:', err.message);
+      }
+
+      try {
+        const modelRateLimits = require('../modules/modelRateLimits');
+
+        for (const [modelName, config] of Object.entries(modelRateLimits)) {
+          await addSystemConfig({
+            configType: 'RATE_LIMIT',
+            configKey: modelName,
+            configValue: config,
+            description: `模型限制配置: ${modelName}`,
+            createdBy: 'SYSTEM_INIT',
+            priority: 10,
+            isDefault: true
+          });
+        }
+
+        console.log(`✓ 已初始化模型限制配置`);
+      } catch (err) {
+        console.error('加载模型限制配置失败:', err.message);
+      }
+
+      console.log('系统配置初始化完成');
     }
-    
-    // 加载 moderationConfig.js
+
+    // 同步最新的内容审核配置（增量补充新路由/模型）
     try {
       const moderationConfig = require('../modules/moderationConfig');
-      
-      // 全局配置
-      await addSystemConfig({
+
+      await ensureDefaultSystemConfig({
         configType: 'MODERATION',
         configKey: 'global',
         configValue: moderationConfig.global,
         description: '内容审核全局配置',
-        createdBy: 'SYSTEM_INIT',
-        priority: 1,
-        isDefault: true
+        priority: 1
       });
-      
-      // 路由配置
+
       for (const [route, config] of Object.entries(moderationConfig.routes)) {
-        await addSystemConfig({
+        await ensureDefaultSystemConfig({
           configType: 'MODERATION',
           configKey: route,
           configValue: config,
           description: `内容审核路由配置: ${route}`,
-          createdBy: 'SYSTEM_INIT',
-          priority: 10,
-          isDefault: true
+          priority: 10
         });
       }
-      
-      console.log(`✓ 已初始化内容审核配置`);
     } catch (err) {
-      console.error('加载内容审核配置失败:', err.message);
+      console.error('同步内容审核配置失败:', err.message);
     }
-    
-    // 加载 chatnioRateLimits.js
-    try {
-      const chatnioRateLimits = require('../modules/chatnioRateLimits');
-      
-      // 公共限制配置
-      await addSystemConfig({
-        configType: 'CHATNIO_LIMIT',
-        configKey: 'commonLimits',
-        configValue: chatnioRateLimits.commonLimits,
-        description: 'ChatNio 公共限制配置',
-        createdBy: 'SYSTEM_INIT',
-        priority: 10,
-        isDefault: true
-      });
-      
-      // 自定义用户限制配置
-      for (const [userIdOrIp, config] of Object.entries(chatnioRateLimits.customLimits)) {
-        await addSystemConfig({
-          configType: 'CHATNIO_LIMIT',
-          configKey: `custom_${userIdOrIp}`,
-          configValue: config,
-          description: `ChatNio 自定义限制: ${userIdOrIp}`,
-          createdBy: 'SYSTEM_INIT',
-          priority: 20,
-          isDefault: true
-        });
-      }
-      
-      console.log(`✓ 已初始化 ChatNio 限制配置`);
-    } catch (err) {
-      console.error('加载 ChatNio 限制配置失败:', err.message);
-    }
-    
-    // 加载 modelRateLimits.js
-    try {
-      const modelRateLimits = require('../modules/modelRateLimits');
-      
-      for (const [modelName, config] of Object.entries(modelRateLimits)) {
-        await addSystemConfig({
-          configType: 'RATE_LIMIT',
-          configKey: modelName,
-          configValue: config,
-          description: `模型限制配置: ${modelName}`,
-          createdBy: 'SYSTEM_INIT',
-          priority: 10,
-          isDefault: true
-        });
-      }
-      
-      console.log(`✓ 已初始化模型限制配置`);
-    } catch (err) {
-      console.error('加载模型限制配置失败:', err.message);
-    }
-    
-    console.log('系统配置初始化完成');
   } catch (err) {
     console.error('初始化系统配置失败:', err.message);
   }

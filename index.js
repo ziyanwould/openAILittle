@@ -997,6 +997,26 @@ const siliconflowProxy = createProxyMiddleware({
   },
 });
 
+// 创建 /image-middleware 路径的代理中间件，接入本地图像/视频生成服务
+const imageMiddlewareProxy = createProxyMiddleware({
+  target: 'http://localhost:6053', // 本地 Image Generation Middleware 服务
+  changeOrigin: true,
+  pathRewrite: {
+    '^/image-middleware': '', // 去掉 /image-middleware 前缀
+  },
+  timeout: 180000, // 允许更长生成时间
+  on: {
+    proxyReq: fixRequestBody,
+    proxyRes: (proxyRes, req, res) => {
+      // 发送通知
+      notices({
+        title: '🧩 本地图像/视频生成中间层',
+        message: `Endpoint: ${req.originalUrl} | Model: ${req.body?.model || 'Unknown'}`
+      }, req.body, 'image-middleware').catch(() => {});
+    },
+  },
+});
+
 // 构建 chatnioRateLimiters 对象
 function buildChatnioRateLimiters() {
   const { commonLimits, customLimits } = chatnioRateLimits;
@@ -1157,6 +1177,10 @@ app.use('/cloudflare', contentModerationMiddleware, cloudflareProxy);
 // 应用 /siliconflow 代理中间件，支持文生图、图生图等功能
 // 对 SiliconFlow 路由：先审核再转发
 app.use('/siliconflow', contentModerationMiddleware, siliconflowProxy);
+
+// 应用 /image-middleware 代理中间件，接入本地图像/视频生成服务
+// 对本地中间层路由：先审核再转发
+app.use('/image-middleware', contentModerationMiddleware, imageMiddlewareProxy);
 
 // 应用 googleRateLimiter 到 googleProxy
 // 对 Google 路由：先审核再转发

@@ -14,6 +14,41 @@ const {
 } = require('../db');
 const { getModelWhitelists, setModelWhitelist, resetModelWhitelists } = require('../db');
 const logCollector = require('../lib/logCollector');
+const { getMinioClient } = require('../lib/minioClient');
+
+let cachedMinioClient = null;
+const SIGNED_URL_TTL = parseInt(process.env.MINIO_SIGNED_URL_TTL || '3600', 10);
+
+function ensureMinioClient() {
+  if (!cachedMinioClient) {
+    try {
+      cachedMinioClient = getMinioClient();
+    } catch (error) {
+      console.error('初始化 MinIO 客户端失败:', error.message || error);
+      cachedMinioClient = null;
+    }
+  }
+  return cachedMinioClient;
+}
+
+async function generateSignedUrl(bucket, objectKey, opts = {}) {
+  if (!bucket || !objectKey) return null;
+  const client = ensureMinioClient();
+  if (!client) return null;
+
+  const expires = Number.isInteger(opts.expires) ? opts.expires : SIGNED_URL_TTL;
+  const responseParams = opts.responseParams || {
+    'response-content-disposition': 'inline'
+  };
+
+  try {
+    const url = await client.presignedGetObject(bucket, objectKey, expires, responseParams);
+    return url;
+  } catch (error) {
+    console.error(`生成 MinIO 签名地址失败 (${bucket}/${objectKey}):`, error.message || error);
+    return null;
+  }
+}
 
 // 基础查询构建器 (添加分页参数)
 function buildFilterQuery(params, forCount = false) {
@@ -330,6 +365,521 @@ router.get('/request/:id/conversation-logs', async (req, res) => {
   } catch (error) {
     console.error('获取对话历史失败:', error);
     res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+function extractUserPromptMessage(messages) {
+  if (!Array.isArray(messages)) return '';
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (!msg || msg.role !== 'user') continue;
+
+    if (typeof msg.content === 'string') {
+      const trimmed = msg.content.trim();
+      if (trimmed) return trimmed;
+    }
+
+    if (Array.isArray(msg.content)) {
+      const textParts = msg.content
+        .filter(part => part && typeof part === 'object' && part.type === 'text' && part.text)
+        .map(part => part.text.trim())
+        .filter(Boolean);
+      if (textParts.length > 0) {
+        return textParts.join('\n');
+      }
+    }
+  }
+  return '';
+}
+
+function detectAssetType(url = '', mime = '') {
+  const normalizedMime = (mime || '').toLowerCase();
+  if (normalizedMime.startsWith('video/')) return 'video';
+  if (normalizedMime.startsWith('image/')) return 'image';
+
+  const cleanUrl = url.split('?')[0].split('#')[0].toLowerCase();
+
+  if (cleanUrl.startsWith('data:video/')) return 'video';
+  if (cleanUrl.startsWith('data:image/')) return 'image';
+
+  if (cleanUrl.endsWith('.mp4') || cleanUrl.endsWith('.webm') || cleanUrl.endsWith('.mov') || cleanUrl.endsWith('.mkv')) {
+    return 'video';
+  }
+
+  if (
+    cleanUrl.endsWith('.png') ||
+    cleanUrl.endsWith('.jpg') ||
+    cleanUrl.endsWith('.jpeg') ||
+    cleanUrl.endsWith('.gif') ||
+    cleanUrl.endsWith('.webp') ||
+    cleanUrl.endsWith('.bmp') ||
+    cleanUrl.endsWith('.svg')
+  ) {
+    return 'image';
+  }
+
+  return 'image';
+}
+
+function collectAssetsFromMessage(message) {
+  const assets = [];
+  if (!message || message.role !== 'assistant') {
+    return assets;
+  }
+
+  if (Array.isArray(message.content)) {
+    message.content.forEach((part) => {
+      if (!part || typeof part !== 'object') return;
+      if (part.type === 'image_url' && part.image_url && part.image_url.url) {
+        assets.push({
+          url: part.image_url.url,
+          mime: part.image_url.mime_type || part.mime_type || part.mime || '',
+          source: 'content'
+        });
+      } else if (part.type === 'video_url' && part.video_url && part.video_url.url) {
+        assets.push({
+          url: part.video_url.url,
+          mime: part.video_url.mime_type || part.mime || '',
+          source: 'content'
+        });
+      } else if (part.url) {
+        assets.push({
+          url: part.url,
+          mime: part.mime_type || part.mime || '',
+          source: 'content'
+        });
+      }
+    });
+  }
+
+  const metadata = message.metadata;
+  if (metadata) {
+    if (Array.isArray(metadata.images)) {
+      metadata.images.forEach((item) => {
+        if (item && item.url) {
+          assets.push({
+            url: item.url,
+            mime: item.mime || item.mime_type || '',
+            source: 'metadata'
+          });
+        }
+      });
+    }
+
+    if (Array.isArray(metadata.videos)) {
+      metadata.videos.forEach((item) => {
+        if (item && item.url) {
+          assets.push({
+            url: item.url,
+            mime: item.mime || item.mime_type || 'video/mp4',
+            source: 'metadata'
+          });
+        }
+      });
+    }
+
+    if (Array.isArray(metadata.items)) {
+      metadata.items.forEach((item) => {
+        if (item && item.url) {
+          assets.push({
+            url: item.url,
+            mime: item.mime || item.mime_type || '',
+            source: 'metadata'
+          });
+        }
+      });
+    }
+  }
+
+  return assets;
+}
+
+// MinIO 资源列表 (基于会话日志聚合)
+router.get('/stats/minio-assets', async (req, res) => {
+  const {
+    page = 1,
+    pageSize = 20,
+    type = 'all',
+    keyword = '',
+    route: routeFilter = '',
+    storage = 'all',
+    order: orderParam = 'desc'
+  } = req.query;
+
+  const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+  const sizeNum = Math.min(Math.max(parseInt(pageSize, 10) || 20, 1), 50);
+  const normalizedType = ['image', 'video'].includes((type || '').toLowerCase()) ? type.toLowerCase() : 'all';
+  const keywordLower = keyword ? keyword.toLowerCase() : '';
+  const routeLower = routeFilter ? routeFilter.toLowerCase() : '';
+  const storageFilter = ['minio', 'external'].includes((storage || '').toLowerCase())
+    ? storage.toLowerCase()
+    : 'all';
+  const order = (orderParam || 'desc').toString().toLowerCase() === 'asc' ? 'asc' : 'desc';
+
+  const scanLimit = Math.min(sizeNum * Math.max(pageNum * 4, 4), 1000);
+
+  try {
+    const [rows] = await pool.query(
+      `
+        SELECT
+          cl.conversation_id AS conversation_log_id,
+          cl.conversation_uuid,
+          cl.messages,
+          cl.created_at AS conversation_created_at,
+          cl.updated_at AS conversation_updated_at,
+          cl.request_id,
+          cl.last_request_id,
+          req_last.model AS last_model,
+          req_last.route AS last_route,
+          req_last.user_id AS last_user_id,
+          req_last.ip AS last_ip,
+          req_last.timestamp AS last_timestamp,
+          req_last.content AS last_request_content,
+          req_first.model AS first_model,
+          req_first.route AS first_route,
+          req_first.user_id AS first_user_id,
+          req_first.ip AS first_ip,
+          req_first.timestamp AS first_timestamp,
+          req_first.content AS first_request_content
+        FROM conversation_logs cl
+        LEFT JOIN requests req_last ON cl.last_request_id = req_last.id
+        LEFT JOIN requests req_first ON cl.request_id = req_first.id
+        ORDER BY cl.conversation_id DESC
+        LIMIT ?
+      `,
+      [scanLimit]
+    );
+
+    const assets = [];
+    const seen = new Set();
+
+    const normalizeAsset = (asset) => {
+      try {
+        const urlObj = new URL(asset.url);
+        const host = urlObj.hostname || '';
+        const isMinioHost = /drawaspark\.com$/i.test(host);
+
+        let bucket = null;
+        let objectKey = null;
+        if (isMinioHost) {
+          const pathSegments = urlObj.pathname.split('/').filter(Boolean);
+          if (pathSegments.length >= 2) {
+            bucket = pathSegments[0];
+            objectKey = pathSegments.slice(1).join('/');
+          }
+        }
+
+        return {
+          ...asset,
+          storage: isMinioHost ? 'minio' : 'external',
+          sourceHost: host,
+          bucket,
+          objectKey
+        };
+      } catch (err) {
+        return {
+          ...asset,
+          storage: 'unknown',
+          sourceHost: null,
+          bucket: null,
+          objectKey: null
+        };
+      }
+    };
+
+    rows.forEach((row) => {
+      let messages = [];
+      try {
+        if (row.messages) {
+          if (Array.isArray(row.messages)) {
+            messages = row.messages;
+          } else if (typeof row.messages === 'string') {
+            messages = JSON.parse(row.messages);
+          } else {
+            console.warn('[MinIO Assets] 解析 messages: 非字符串/数组类型，已忽略');
+            messages = [];
+          }
+        }
+      } catch (err) {
+        console.warn('[MinIO Assets] 解析 messages 失败:', err.message);
+        messages = [];
+      }
+
+      const prompt = extractUserPromptMessage(messages) ||
+        row.first_request_content ||
+        row.last_request_content ||
+        '';
+
+      const model = row.last_model || row.first_model || 'unknown';
+      const requestRoute = row.last_route || row.first_route || '';
+      const userId = row.last_user_id || row.first_user_id || '';
+      const userIp = row.last_ip || row.first_ip || '';
+      const requestId = row.last_request_id || row.request_id || null;
+      const timestamp = row.last_timestamp || row.first_timestamp || row.conversation_updated_at;
+
+      messages.forEach((message, messageIndex) => {
+        const extracted = collectAssetsFromMessage(message);
+        extracted.forEach((item, itemIndex) => {
+          if (!item || !item.url) return;
+          const typeDetected = detectAssetType(item.url, item.mime);
+          if (normalizedType !== 'all' && normalizedType !== typeDetected) {
+            return;
+          }
+          if (routeLower && requestRoute.toLowerCase() !== routeLower) {
+            return;
+          }
+
+          const combined = `${item.url}__${row.conversation_uuid || row.conversation_log_id}`;
+          if (seen.has(combined)) return;
+          seen.add(combined);
+
+          const normalized = normalizeAsset({
+            id: `${row.conversation_log_id}-${messageIndex}-${itemIndex}`,
+            conversationId: row.conversation_uuid,
+            requestId,
+            model,
+            route: requestRoute,
+            userId,
+            userIp,
+            prompt,
+            url: item.url,
+            mime: item.mime || null,
+            type: typeDetected,
+            source: item.source || 'content',
+            createdAt: timestamp || row.conversation_updated_at || row.conversation_created_at
+          });
+
+          if (storageFilter === 'minio' && normalized.storage !== 'minio') {
+            return;
+          }
+          if (storageFilter === 'external' && normalized.storage !== 'external') {
+            return;
+          }
+
+          if (keywordLower) {
+            const combinedField = [
+              normalized.model,
+              normalized.route,
+              normalized.userId,
+              normalized.userIp,
+              normalized.prompt,
+              normalized.sourceHost || ''
+            ].join(' ').toLowerCase();
+            if (!combinedField.includes(keywordLower)) {
+              return;
+            }
+          }
+
+          assets.push(normalized);
+        });
+      });
+    });
+
+    const processedAssets = await Promise.all(
+      assets.map(async (item) => {
+        if (item.storage === 'minio' && item.bucket && item.objectKey) {
+          const signedUrl = await generateSignedUrl(item.bucket, item.objectKey);
+          if (signedUrl) {
+            return {
+              ...item,
+              signedUrl
+            };
+          }
+        }
+        return item;
+      })
+    );
+
+    processedAssets.sort((a, b) => {
+      const timeA = new Date(a.createdAt || 0).getTime();
+      const timeB = new Date(b.createdAt || 0).getTime();
+      const validA = Number.isFinite(timeA) && timeA > 0;
+      const validB = Number.isFinite(timeB) && timeB > 0;
+
+      if (validA && validB) {
+        return order === 'asc' ? timeA - timeB : timeB - timeA;
+      }
+
+      if (validA && !validB) {
+        return order === 'asc' ? 1 : -1;
+      }
+
+      if (!validA && validB) {
+        return order === 'asc' ? -1 : 1;
+      }
+
+      if (a.type !== b.type) {
+        if (a.type === 'image') return -1;
+        if (b.type === 'image') return 1;
+        if (a.type === 'video') return -1;
+        if (b.type === 'video') return 1;
+      }
+
+      return 0;
+    });
+
+    const start = (pageNum - 1) * sizeNum;
+    const pagedAssets = processedAssets.slice(start, start + sizeNum);
+    const hasMore = processedAssets.length > start + pagedAssets.length;
+
+    res.json({
+      data: pagedAssets,
+      page: pageNum,
+      pageSize: sizeNum,
+      total: processedAssets.length,
+      hasMore,
+      meta: {
+        scannedRecords: rows.length,
+        filteredByType: normalizedType,
+        filteredByStorage: storageFilter,
+        keyword: keywordLower || null,
+        order
+      }
+    });
+  } catch (error) {
+    console.error('获取 MinIO 资源失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+router.get('/stats/minio-buckets', async (req, res) => {
+  try {
+    const client = ensureMinioClient();
+    if (!client) {
+      return res.status(500).json({ error: 'MinIO 配置缺失，无法获取桶列表' });
+    }
+
+    const buckets = await client.listBuckets();
+    const data = (buckets || []).map((bucket) => ({
+      name: bucket.name,
+      creationDate: bucket.creationDate ? new Date(bucket.creationDate).toISOString() : null
+    }));
+
+    res.json({ data });
+  } catch (error) {
+    console.error('获取 MinIO 桶列表失败:', error);
+    const message = error && error.message ? error.message : '未知错误';
+    res.status(500).json({ error: `获取 MinIO 桶列表失败：${message}` });
+  }
+});
+
+// MinIO 桶对象列表
+router.get('/stats/minio-objects', async (req, res) => {
+  const bucket = (req.query.bucket || process.env.MINIO_BUCKET || 'images').trim();
+  const prefix = (req.query.prefix || '').trim();
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
+  const startAfter = (req.query.startAfter || '').trim();
+  const recursive = req.query.recursive !== 'false';
+  const orderParam = (req.query.order || 'desc').toString().toLowerCase();
+  const order = orderParam === 'asc' ? 'asc' : 'desc';
+
+  if (!bucket) {
+    return res.status(400).json({ error: '桶名称不能为空' });
+  }
+
+  try {
+    const minioClient = ensureMinioClient();
+    if (!minioClient) {
+      return res.status(500).json({ error: 'MinIO 配置缺失，无法列出对象' });
+    }
+    const objects = [];
+    let hasMore = false;
+    let lastObjectName = null;
+
+    await new Promise((resolve, reject) => {
+      let resolved = false;
+      const stream = minioClient.listObjectsV2(bucket, prefix, recursive, startAfter || undefined);
+
+      stream.on('data', (obj) => {
+        lastObjectName = obj.name;
+
+        if (objects.length < limit) {
+          objects.push({
+            name: obj.name,
+            size: obj.size,
+            etag: obj.etag,
+            lastModified: obj.lastModified ? new Date(obj.lastModified).toISOString() : null,
+            storageClass: obj.storageClass || null
+          });
+        } else {
+          hasMore = true;
+          stream.removeAllListeners('data');
+          stream.destroy();
+        }
+      });
+
+      stream.on('error', (err) => {
+        if (!resolved) {
+          resolved = true;
+          reject(err);
+        }
+      });
+
+      const finalize = () => {
+        if (!resolved) {
+          resolved = true;
+          resolve();
+        }
+      };
+
+      stream.on('end', finalize);
+      stream.on('close', finalize);
+    });
+
+    const lastEntry = objects[objects.length - 1];
+
+    const signedObjects = await Promise.all(
+      objects.map(async (obj) => {
+        const signedUrl = await generateSignedUrl(bucket, obj.name);
+        return {
+          ...obj,
+          signedUrl
+        };
+      })
+    );
+
+    signedObjects.sort((a, b) => {
+      const timeA = new Date(a.lastModified || 0).getTime();
+      const timeB = new Date(b.lastModified || 0).getTime();
+      const validA = Number.isFinite(timeA) && timeA > 0;
+      const validB = Number.isFinite(timeB) && timeB > 0;
+
+      if (validA && validB) {
+        return order === 'asc' ? timeA - timeB : timeB - timeA;
+      }
+      if (validA && !validB) {
+        return order === 'asc' ? 1 : -1;
+      }
+      if (!validA && validB) {
+        return order === 'asc' ? -1 : 1;
+      }
+      return a.name.localeCompare(b.name);
+    });
+
+    res.json({
+      bucket,
+      prefix,
+      limit,
+      startAfterUsed: startAfter,
+      objects: signedObjects,
+      hasMore,
+      nextStartAfter: hasMore && lastEntry ? lastEntry.name : null,
+      publicBaseUrl: process.env.MINIO_PUBLIC_BASE_URL || null,
+      order
+    });
+  } catch (error) {
+    console.error('列出 MinIO 对象失败:', error);
+    let errMsg = '获取 MinIO 存储桶数据失败';
+    let statusCode = 500;
+
+    if (error && error.code === 'InvalidArgument' && /S3 API Requests must be made to API port/i.test(error.message || '')) {
+      errMsg = '无法连接到 MinIO API，请确认 MINIO_INTERNAL_ENDPOINT/MINIO_INTERNAL_PORT 配置指向 API 端口';
+      statusCode = 502;
+    } else if (error && error.message) {
+      errMsg = `${errMsg}：${error.message}`;
+    }
+
+    res.status(statusCode).json({ error: errMsg });
   }
 });
 

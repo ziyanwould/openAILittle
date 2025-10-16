@@ -76,6 +76,13 @@ async function prepareLogData(req) {
     }
   }
 
+  // 本地中间层图像/视频生成路由，保持与 SiliconFlow 一致的兜底逻辑
+  if (req.originalUrl.includes('/image-middleware/')) {
+    if (!modelName && req.originalUrl.includes('/v1/images/generations')) {
+      modelName = 'image-generation';
+    }
+  }
+
   // 构建基础日志数据
   const baseLogData = {
     user_id: isTimestamp(userId) ? 'anonymous' : userId,

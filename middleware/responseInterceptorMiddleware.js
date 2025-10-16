@@ -496,7 +496,8 @@ module.exports = function responseInterceptorMiddleware(req, res, next) {
                       route.startsWith('/freeopenai/') ||
                       route.startsWith('/freegemini/') ||
                       route.startsWith('/cloudflare/') ||
-                      route.startsWith('/siliconflow/');
+                      route.startsWith('/siliconflow/') ||
+                      route.startsWith('/image-middleware/');
 
   if (!isAIRequest) {
     return next();

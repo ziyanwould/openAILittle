@@ -107,6 +107,29 @@ module.exports = {
         'Kwai-Kolors/Kolors': { enabled: true },        // 快手可图文生图模型
         'default': { enabled: true }
       }
+    },
+
+    '/image-middleware': {
+      enabled: true,
+      description: '本地图像/视频生成中间层路由',
+      models: {
+        'cogview-3': { enabled: true },                 // 智谱 CogView3 文生图
+        'cogview-3-flash': { enabled: true },           // 智谱 CogView3 快速版
+        'grok-2-image': { enabled: true },              // Grok-2 文生图
+        'grok-2': { enabled: true },                    // Grok-2 多模态
+        'Kwai-Kolors/Kolors': { enabled: true },        // 快手 Kolors 图像模型
+        'Qwen/Qwen-Image': { enabled: true },           // 通义千问文生图
+        'Qwen/Qwen-Image-Edit': { enabled: true },      // 通义千问图像编辑
+        'Qwen/Qwen-Image-Edit-2509': { enabled: true }, // 通义千问最新图像编辑
+        'volc-ark-image': { enabled: true },            // 火山方舟文生图
+        'volc-ark': { enabled: true },                  // 火山方舟视频多合一
+        'volc-ark-t2v': { enabled: true },              // 火山方舟文生视频
+        'volc-ark-i2v': { enabled: true },              // 火山方舟图生视频
+        'volc-ark-i2v-lite': { enabled: true },         // 火山方舟图生视频轻量版
+        'Wan-AI/Wan2.2-T2V-A14B': { enabled: true },    // 硅基流动 WAN 文生视频
+        'Wan-AI/Wan2.2-I2V-A14B': { enabled: true },    // 硅基流动 WAN 图生视频
+        'default': { enabled: true }                    // 兜底启用所有支持模型
+      }
     }
   },
 
