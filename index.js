@@ -998,8 +998,9 @@ const siliconflowProxy = createProxyMiddleware({
 });
 
 // 创建 /image-middleware 路径的代理中间件，接入本地图像/视频生成服务
+const imageMiddlewareTarget = process.env.IMAGE_MIDDLEWARE_TARGET || 'http://localhost:6053';
 const imageMiddlewareProxy = createProxyMiddleware({
-  target: 'http://localhost:6053', // 本地 Image Generation Middleware 服务
+  target: imageMiddlewareTarget, // 本地 Image Generation Middleware 服务
   changeOrigin: true,
   pathRewrite: {
     '^/image-middleware': '', // 去掉 /image-middleware 前缀

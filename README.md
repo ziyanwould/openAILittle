@@ -161,6 +161,8 @@ docker run -p 20492:20491 -p 30492:30491 openai-little
 TARGET_SERVER=https://api.openai.com
 TARGET_SERVER_GEMIN=https://generativelanguage.googleapis.com
 TARGET_SERVER_FEISHU=https://open.feishu.cn/open-apis/bot/v2/hook/
+# 图像/视频中间层转发目标（默认 http://localhost:6053）
+IMAGE_MIDDLEWARE_TARGET=http://localhost:6053
 
 # 模型白名单配置
 FREELYAI_WHITELIST=model1,model2
