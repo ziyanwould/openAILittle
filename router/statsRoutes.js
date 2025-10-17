@@ -2993,16 +2993,91 @@ router.post('/stats/model-whitelists/reset', async (req, res) => {
 // ==================== 控制台日志 API ====================
 router.get('/logs/console', async (req, res) => {
   try {
-    const { limit, level, since } = req.query;
-    const logs = await logCollector.getLogs({ limit, level, since });
+    const { limit, level, since, sources } = req.query;
+
+    // 解析sources参数
+    let parsedSources = ['local']; // 默认只获取本地日志
+    if (sources) {
+      try {
+        parsedSources = Array.isArray(sources) ? sources : sources.split(',');
+      } catch (e) {
+        parsedSources = [sources];
+      }
+    }
+
+    const logs = await logCollector.getLogs({
+      limit,
+      level,
+      since,
+      sources: parsedSources
+    });
+
+    // 统计各来源的日志数量
+    const sourceStats = {};
+    logs.forEach(log => {
+      const source = log.source || 'unknown';
+      sourceStats[source] = (sourceStats[source] || 0) + 1;
+    });
+
     res.json({
       success: true,
       data: logs,
       total: logs.length,
-      latestTimestamp: logs.length ? logs[logs.length - 1].timestamp : null
+      latestTimestamp: logs.length ? logs[logs.length - 1].timestamp : null,
+      sourceStats: sourceStats,
+      sources: parsedSources
     });
   } catch (error) {
     console.error('读取控制台日志失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+// ==================== 中间件日志 API ====================
+router.get('/logs/middleware', async (req, res) => {
+  try {
+    const middlewareUrl = process.env.IMAGE_MIDDLEWARE_TARGET;
+    if (!middlewareUrl) {
+      return res.status(500).json({ error: 'IMAGE_MIDDLEWARE_TARGET 环境变量未配置' });
+    }
+
+    const { limit = 100, level } = req.query;
+    const logsUrl = `${middlewareUrl}/logs?limit=${limit}${level ? `&level=${level}` : ''}`;
+
+    try {
+      const response = await fetch(logsUrl, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        timeout: 5000 // 5秒超时
+      });
+
+      if (!response.ok) {
+        throw new Error(`中间件服务响应错误: ${response.status} ${response.statusText}`);
+      }
+
+      const data = await response.json();
+
+      res.json({
+        success: true,
+        data: data.data || [],
+        total: data.data?.length || 0,
+        source: 'image-middleware',
+        latestTimestamp: data.data?.length ? data.data[data.data.length - 1].timestamp : null
+      });
+    } catch (fetchError) {
+      console.error('获取中间件日志失败:', fetchError.message);
+      res.json({
+        success: false,
+        data: [],
+        total: 0,
+        source: 'image-middleware',
+        error: fetchError.message
+      });
+    }
+  } catch (error) {
+    console.error('中间件日志API错误:', error);
     res.status(500).json({ error: '服务器内部错误' });
   }
 });
