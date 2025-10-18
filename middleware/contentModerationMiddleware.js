@@ -8,6 +8,7 @@
  */
 
 const moderationConfig = require('../modules/moderationConfig');
+const databaseModerationConfig = require('../modules/databaseModerationConfig');
 const moment = require('moment');
 const crypto = require('crypto');
 const { logModerationResult, checkUserIpBanStatus, updateViolationCount, findOrCreateUser } = require('../db/index');
@@ -86,7 +87,8 @@ function collectTextSegments(value, options = {}) {
 
 class ContentModerationMiddleware {
   constructor() {
-    // 使用文件配置（运行时通过文件热更新）
+    // 优先使用数据库配置，fallback到文件配置
+    this.useDatabaseConfig = true;
     this.config = moderationConfig;
     this.cache = new Map(); // 缓存审查结果
     this.cacheExpiry = 30 * 60 * 1000; // 缓存30分钟
@@ -157,11 +159,41 @@ class ContentModerationMiddleware {
   }
 
   /**
+   * 获取当前配置（优先从数据库获取）
+   */
+  async getCurrentConfig() {
+    if (this.useDatabaseConfig) {
+      try {
+        const globalConfig = await databaseModerationConfig.getGlobalConfig();
+        return { global: globalConfig };
+      } catch (error) {
+        console.error('Failed to get config from database, using file config:', error);
+      }
+    }
+    return this.config;
+  }
+
+  /**
+   * 获取路由配置（优先从数据库获取）
+   */
+  async getRouteConfig(routePrefix) {
+    if (this.useDatabaseConfig) {
+      try {
+        return await databaseModerationConfig.getRouteConfig(routePrefix);
+      } catch (error) {
+        console.error(`Failed to get route config for ${routePrefix} from database:`, error);
+      }
+    }
+    return this.config.routes[routePrefix];
+  }
+
+  /**
    * 调用智谱AI内容审查API
    */
   async callModerationAPI(content) {
     try {
-      const response = await fetch(this.config.global.apiEndpoint, {
+      const config = await this.getCurrentConfig();
+      const response = await fetch(config.global.apiEndpoint, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${process.env.ZHIPU_API_KEY}`,
@@ -171,7 +203,7 @@ class ContentModerationMiddleware {
           model: 'moderation', // 智谱AI内容安全API使用moderation模型
           input: content // 纯文本字符串，最大输入长度：2000 字符
         }),
-        signal: AbortSignal.timeout(this.config.global.timeout)
+        signal: AbortSignal.timeout(config.global.timeout)
       });
 
       console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] API Response status: ${response.status}`);
@@ -232,9 +264,31 @@ class ContentModerationMiddleware {
   }
 
   /**
-   * 检查路由和模型是否需要内容审查
+   * 检查路由和模型是否需要内容审查（异步版本，支持数据库配置）
    */
-  shouldModerate(routePrefix, model) {
+  async shouldModerate(routePrefix, model) {
+    if (this.useDatabaseConfig) {
+      return await databaseModerationConfig.shouldModerate(routePrefix, model);
+    }
+
+    // 回退到文件配置
+    if (!this.config.global.enabled) {
+      return false;
+    }
+
+    const routeConfig = this.config.routes[routePrefix];
+    if (!routeConfig || !routeConfig.enabled) {
+      return false;
+    }
+
+    const modelConfig = routeConfig.models[model] || routeConfig.models['default'];
+    return modelConfig && modelConfig.enabled;
+  }
+
+  /**
+   * 检查路由和模型是否需要内容审查（同步版本，保持向后兼容）
+   */
+  shouldModerateSync(routePrefix, model) {
     if (!this.config.global.enabled) {
       return false;
     }
@@ -251,8 +305,19 @@ class ContentModerationMiddleware {
   /**
    * 获取路由前缀（用于从字符串路径提取）
    */
-  getRoutePrefix(path) {
+  async getRoutePrefix(path) {
     if (!path || typeof path !== 'string') return '';
+
+    if (this.useDatabaseConfig) {
+      try {
+        const routePrefixes = await databaseModerationConfig.getRoutePrefixes();
+        return routePrefixes.find(prefix => path.startsWith(prefix)) || '';
+      } catch (error) {
+        console.error('Failed to get route prefixes from database:', error);
+      }
+    }
+
+    // 回退到文件配置
     const prefixes = Object.keys(this.config.routes);
     return prefixes.find(prefix => path.startsWith(prefix)) || '';
   }
@@ -315,12 +380,13 @@ class ContentModerationMiddleware {
           });
         }
 
-        // 2. 检查是否需要审查
-        const shouldModerateResult = this.shouldModerate(routePrefix, model);
-        console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] Should moderate: ${shouldModerateResult}, Global enabled: ${this.config.global.enabled}`);
-        
+        // 2. 检查是否需要审查（使用异步数据库配置）
+        const shouldModerateResult = await this.shouldModerate(routePrefix, model);
+        const globalConfig = await this.getCurrentConfig();
+        console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] Should moderate: ${shouldModerateResult}, Global enabled: ${globalConfig.global.enabled}`);
+
         if (routePrefix) {
-          const routeConfig = this.config.routes[routePrefix];
+          const routeConfig = await this.getRouteConfig(routePrefix);
           console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] Route config enabled: ${routeConfig ? routeConfig.enabled : 'N/A'}`);
           if (routeConfig && routeConfig.models) {
             const modelConfig = routeConfig.models[model] || routeConfig.models['default'];
@@ -498,11 +564,16 @@ class ContentModerationMiddleware {
   /**
    * 重新加载配置
    */
-  reloadConfig() {
+  async reloadConfig() {
     try {
-      delete require.cache[require.resolve('../modules/moderationConfig')];
-      this.config = require('../modules/moderationConfig');
-      console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Content moderation config reloaded`);
+      if (this.useDatabaseConfig) {
+        await databaseModerationConfig.reloadConfig();
+        console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Database moderation config reloaded`);
+      } else {
+        delete require.cache[require.resolve('../modules/moderationConfig')];
+        this.config = require('../modules/moderationConfig');
+        console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} File moderation config reloaded`);
+      }
     } catch (error) {
       console.error(`${moment().format('YYYY-MM-DD HH:mm:ss')} Failed to reload moderation config:`, error.message);
     }
@@ -517,8 +588,8 @@ setInterval(() => {
   moderationMiddleware.cleanExpiredCache();
 }, 10 * 60 * 1000); // 每10分钟清理一次
 
-setInterval(() => {
-  moderationMiddleware.reloadConfig();
+setInterval(async () => {
+  await moderationMiddleware.reloadConfig();
 }, 5 * 60 * 1000); // 每5分钟重新加载配置
 
 module.exports = moderationMiddleware.middleware();

@@ -1,7 +1,7 @@
 # OpenAI Little - 开发记录文档
 
-> **更新时间**: 2025-10-14
-> **版本**: 1.10.2 (控制台日志面板 + 日志轮换)
+> **更新时间**: 2025-10-18
+> **版本**: 1.11.0 (图像中间件日志推送 + 动态审核配置)
 > **作者**: Liu Jiarong  
 
 ## 🏗️ 项目架构概览
@@ -35,7 +35,8 @@ openAILittle/
 | `/freeopenai/*` | Free OpenAI | TARGET_SERVER | 文本生成 | ✅ 运行中 |
 | `/freegemini/*` | Free Gemini | TARGET_SERVER_GEMIN | 文本生成、多模态 | ✅ 运行中 |
 | `/cloudflare/*` | Cloudflare AI | https://api.cloudflare.com | 图像生成、文生图 | ✅ 运行中 |
-| `/siliconflow/*` | SiliconFlow AI | https://api.siliconflow.cn | 图像生成、图生图 | 🆕 新增 |
+| `/siliconflow/*` | SiliconFlow AI | https://api.siliconflow.cn | 图像生成、图生图 | ✅ 运行中 |
+| `/image-middleware/*` | 本地图像中间件 | IMAGE_MIDDLEWARE_TARGET | 图像/视频生成 | 🆕 新增 |
 
 ## 🛡️ 安全防护系统
 
@@ -58,8 +59,13 @@ openAILittle/
 4. **🆕 内容审查系统** (2025-09-11 新增)
    - `modules/moderationConfig.js` - 内容审查配置
    - `middleware/contentModerationMiddleware.js` - 审查中间件
+   - `modules/databaseModerationConfig.js` - 数据库驱动的审核配置
    - 集成智谱AI内容安全API
    - 支持实时内容审查和风险检测
+   - **🆕 数据库配置支持** (2025-10-18 新增)
+     - 前端可视化配置审核规则
+     - 实时生效，无需重启服务
+     - 支持路由和模型级别的审核策略
 
 ## ⚡ 智能限流系统
 
@@ -82,13 +88,51 @@ openAILittle/
 | `limitRequestBodyLength.js` | 请求体长度限制 | ✅ 活跃 |
 | `loggingMiddleware.js` | 日志记录中间件 | ✅ 活跃 |
 | `modifyRequestBodyMiddleware.js` | 请求体修改处理 | ✅ 活跃 |
-| `contentModerationMiddleware.js` | 内容审查中间件 | 🆕 新增 |
+| `contentModerationMiddleware.js` | 内容审查中间件 | ✅ 活跃 |
+
+### 🆕 图像中间件日志收集系统 (2025-10-18 新增)
+**架构设计**
+- **本地中间件**: 独立的Node.js服务，运行在6053端口
+- **日志收集器**: 拦截console输出，存储到内存缓冲区
+- **HTTP接口**: 提供`/logs`和`/health`端点
+- **主服务聚合**: 通过`/api/logs/middleware`获取中间件日志
+- **前端展示**: 支持来源筛选的统一日志界面
+
+**技术实现**
+```javascript
+// 中间件日志收集器
+class LogCollector {
+  constructor() {
+    this.setupLogCollection(); // 拦截console方法
+  }
+  getLogs({ limit, level }) { /* 返回结构化日志 */ }
+}
+
+// 主服务日志聚合
+router.get('/logs/middleware', async (req, res) => {
+  const response = await fetch(`${IMAGE_MIDDLEWARE_TARGET}/logs`);
+  // 返回聚合后的日志数据
+});
+
+// 前端日志展示
+SystemLogsView.vue:
+- 来源选择器：local,middleware,all
+- 实时统计：各服务日志数量分布
+- 级别过滤：info,warn,error,debug
+```
+
+**支持的功能**
+- 实时日志收集：拦截console.log/warn/error/debug
+- 内存缓冲：最多保存1000条日志记录
+- HTTP接口：RESTful API获取日志数据
+- 聚合展示：前端统一查看主服务+中间件日志
+- 来源标识：日志条目包含服务来源标识
 
 ### 中间件执行顺序 (index.js)
 ```javascript
 1. restrictGeminiModelAccess
-2. loggingMiddleware  
-3. contentModerationMiddleware  // 🆕 新增
+2. loggingMiddleware
+3. contentModerationMiddleware  // 动态配置支持
 4. 其他路由特定中间件...
 ```
 
@@ -141,23 +185,71 @@ openAILittle/
 - **CORS支持**: 前端数据可视化
 - **API路由**: `/api/*`
 
-## 🆕 内容审查功能详情 (2025-09-11)
+## 🆕 内容审查功能详情 (2025-09-11 更新至2025-10-18)
 
-### 配置文件: `modules/moderationConfig.js`
+#### 配置架构升级
+**静态配置 → 动态数据库配置**
+- `modules/moderationConfig.js` - 静态fallback配置
+- `modules/databaseModerationConfig.js` - 数据库配置加载器
+- `middleware/contentModerationMiddleware.js` - 支持动态配置的审核中间件
+
+#### 数据库配置系统
+```sql
+-- system_configs 表存储审核配置
+config_type: 'MODERATION'
+config_key: 'global' | '/chatnio' | '/v1' | '/freelyai' ...
+config_value: {
+  enabled: true,
+  models: {
+    'gpt-5': { enabled: true },
+    'default': { enabled: false }
+  },
+  description: '路由描述'
+}
+```
+
+#### 配置加载机制
+```javascript
+// 数据库配置优先，文件配置作为fallback
+async getCurrentConfig() {
+  if (this.useDatabaseConfig) {
+    const globalConfig = await databaseModerationConfig.getGlobalConfig();
+    return { global: globalConfig };
+  }
+  return this.config; // 文件配置
+}
+
+// 支持路由和模型级别的审核策略
+async shouldModerate(routePrefix, model) {
+  return await databaseModerationConfig.shouldModerate(routePrefix, model);
+}
+```
+
+#### 前端配置管理
+- **可视化界面**: 通过前端管理界面配置审核规则
+- **实时生效**: 配置修改后2分钟内自动生效
+- **路由管理**: 支持不同路由的独立审核策略
+- **模型控制**: 精确到模型级别的审核开关
+
+#### 当前配置状态 (/chatnio 路由)
 ```javascript
 {
-  global: {
-    enabled: true, // ✅ 已启用
-    apiEndpoint: 'https://open.bigmodel.cn/api/paas/v4/moderations',
-    timeout: 10000
+  enabled: true,
+  models: {
+    "gpt-5": { enabled: true },
+    "dall-e-img": { enabled: true },
+    "gpt-5-mini": { enabled: true },
+    "gpt-5-nano": { enabled: true },
+    "gpt-4o-mini": { enabled: true },
+    "gpt-4.1-nano": { enabled: true },
+    "claude-sonnet-4-5": { enabled: true },
+    "gemini-flash-latest": { enabled: true },
+    "claude-opus-4-1-20250805": { enabled: true },
+    "gemini-flash-lite-latest": { enabled: true },
+    "deepseek-ai/DeepSeek-V3.1": { enabled: false },
+    "default": { enabled: false }
   },
-  routes: {
-    '/v1': { enabled: true, models: {...} },
-    '/chatnio': { enabled: true, models: {
-      'deepseek-ai/DeepSeek-V3.1': { enabled: true } // 已配置
-    }},
-    '/freeopenai': { enabled: true, models: {...} }
-  }
+  description: "ChatNio 平台路由"
 }
 ```
 
@@ -222,6 +314,9 @@ MAIN_PORT=7104
 
 # 🆕 内容审查配置
 ZHIPU_API_KEY=c5a84cde65d86beb070277e68a0d41a5.qoo9MSsDXWiENir3
+
+# 🆕 图像中间件配置
+IMAGE_MIDDLEWARE_TARGET=http://localhost:6053
 
 # 模型白名单
 FREELYAI_WHITELIST=deepseek-v3,deepseek-r1,glm-4-flashx-250414...
@@ -317,12 +412,87 @@ grep "Content Moderation" logs/app.log  # 过滤审查日志
 
 ## 🆕 更新日志
 
+### 2025-10-18 - v1.11.0 图像中间件日志推送 + 动态审核配置
+
+#### 🚀 核心功能升级
+**图像中间件日志收集系统**
+- 实现本地图像中间件日志推送功能，支持实时日志收集和统一展示
+- 新增中间件日志收集器：拦截console输出，内存缓冲区存储
+- 主服务日志聚合接口：通过HTTP API获取中间件日志
+- 前端统一日志界面：支持来源筛选，主服务+中间件日志合并展示
+
+**动态审核配置系统**
+- 审查中间件支持从数据库动态加载配置，替代静态文件配置
+- 新增数据库配置加载器：2分钟缓存机制，实时配置更新
+- 完善前端可视化配置界面，支持路由和模型级别审核策略
+- 实现配置热更新，无需重启服务即可生效
+
+#### 🛠️ 技术实现细节
+
+**图像中间件端改造**
+- `src/utils/logCollector.ts` - 日志收集器，拦截console方法
+- `src/main.ts` - 新增 `/logs` 和 `/health` HTTP端点
+- 支持按级别过滤和数量限制的日志查询
+- 内存缓冲机制：最多保存1000条日志记录
+
+**主服务集成**
+- `modules/databaseModerationConfig.js` - 数据库配置加载器
+- `middleware/contentModerationMiddleware.js` - 支持动态配置的审核中间件
+- `router/statsRoutes.js` - 新增 `/api/logs/middleware` 和增强 `/api/logs/console`
+- `lib/logCollector.js` - 支持多源日志聚合和来源统计
+
+**前端界面增强**
+- 来源选择器：local,middleware,all
+- 实时统计：各服务日志数量分布展示
+- 级别过滤：info,warn,error,debug完整支持
+- 新增 `getMiddlewareLogs` API封装
+
+#### 📊 验证结果
+**日志收集功能**
+- ✅ 中间件正常运行在6053端口
+- ✅ 日志接口 `/logs` 和 `/health` 正常响应
+- ✅ 主服务成功聚合中间件日志数据
+- ✅ 前端统一日志界面正常展示
+
+**审核配置功能**
+- ✅ 数据库配置正确加载，替代静态文件配置
+- ✅ `/chatnio` 路由配置：11个模型启用，1个模型禁用
+- ✅ 审核中间件正常调用数据库配置
+- ✅ 前端可视化配置界面正常工作
+
+**系统兼容性**
+- ✅ 向下兼容：文件配置作为fallback备份
+- ✅ 平滑升级：生产环境无缝切换到数据库配置
+- ✅ 错误容错：配置异常时自动降级处理
+- ✅ 实时生效：配置修改后快速应用
+
+#### 🎯 系统价值提升
+**运维监控增强**
+- 统一日志查看：主服务+中间件日志一站式管理
+- 实时问题追踪：多服务日志集中监控
+- 来源标识：清晰区分不同服务的日志输出
+- 级别过滤：精准定位不同级别的问题
+
+**配置管理优化**
+- 可视化管理：通过Web界面直观配置审核规则
+- 实时生效：配置变更快速应用，无需重启
+- 精细控制：路由和模型级别的审核策略定制
+- 操作便捷：降低配置修改的技术门槛
+
+**系统可靠性**
+- 多层保障：数据库+文件配置双重备份
+- 错误容错：配置异常不影响主业务流程
+- 性能优化：缓存机制减少数据库查询频率
+- 向下兼容：保护现有投资，平滑迁移
+
+---
+
 ### 2025-10-14 - v1.10.2 控制台日志可视化 + 日志轮换
 
 #### ✨ 新增功能
 - **实时控制台日志面板**：前端新增「系统日志」页面 (`SystemLogsView.vue`)，支持级别筛选（info/warn/error/debug）、关键字搜索、动态条数调节以及 5 秒自动刷新，直观展示 `console` 输出与进程信息。
 - **使用情况导出**：`UsageTable.vue` 新增「导出 CSV」按钮，可基于筛选条件一键导出请求明细，便于线下排查与归档。
-- **首页概览卡片**：`StatsOverviewCards.vue` 汇总累计请求、会话总数、今日活跃用户与今日违规拦截等关键指标，为运营提供“开箱即用”的可视化看板。
+- **首页概览卡片**：`StatsOverviewCards.vue` 汇总累计请求、会话总数、今日活跃用户与今日违规拦截等关键指标，为运营提供"开箱即用"的可视化看板。
 - **统计服务日志 API**：`GET /api/logs/console` 返回最近日志，包含时间戳、级别、来源、PID、消息文本，便于统一监控与审计。
 - **健康检查接口**：主服务与统计服务分别提供 `GET /health`，用于监控探测与自动化告警。
 
