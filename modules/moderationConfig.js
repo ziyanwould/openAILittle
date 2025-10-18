@@ -45,12 +45,42 @@ module.exports = {
       enabled: true,
       description: 'ChatNio 平台路由',
       models: {
-        'dall-e-img': { enabled: true },
-        'gpt-4o-mini': { enabled: true },
-        'gpt-4.1-nano': { enabled: true },
-        'gpt-5-nano': { enabled: true },
-        'deepseek-ai/DeepSeek-V3.1': { enabled: false },
-        'default': { enabled: false }
+        "default": {
+          "enabled": false
+        },
+        "dall-e-img": {
+          "enabled": true
+        },
+        "gpt-5-nano": {
+          "enabled": true
+        },
+        "gpt-4o-mini": {
+          "enabled": true
+        },
+        "gpt-4.1-nano": {
+          "enabled": true
+        },
+        "deepseek-ai/DeepSeek-V3.1": {
+          "enabled": false
+        },
+        "claude-opus-4-1-20250805": {
+          "enabled": true
+        },
+        "claude-sonnet-4-5": {
+          "enabled": true
+        },
+        "gpt-5": {
+          "enabled": true
+        },
+        "gpt-5-mini": {
+          "enabled": true
+        },
+        "gemini-flash-latest": {
+          "enabled": true
+        },
+        "gemini-flash-lite-latest": {
+          "enabled": true
+        }
       }
     },
     
