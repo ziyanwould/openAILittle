@@ -269,12 +269,12 @@ router.get('/request/:id/conversation-logs', async (req, res) => {
 
     // 🆕 v1.10.0优化: 优先通过conversation_id查询
     if (request.conversation_id) {
+      // conversation_uuid是唯一标识,只会返回1条记录,无需ORDER BY排序
       conversationQuery = `
         SELECT cl.*, r.content
         FROM conversation_logs cl
         LEFT JOIN requests r ON cl.last_request_id = r.id
         WHERE cl.conversation_uuid = ?
-        ORDER BY cl.created_at DESC
       `;
       queryParams = [request.conversation_id];
     } else if (request.is_anonymous) {
@@ -290,12 +290,12 @@ router.get('/request/:id/conversation-logs', async (req, res) => {
       queryParams = [request.ip];
     } else {
       // 兜底策略2: 普通用户通过request_id查询 (兼容旧数据)
+      // request_id是唯一标识,只会返回1条记录,无需ORDER BY排序
       conversationQuery = `
         SELECT cl.*, r.content
         FROM conversation_logs cl
         LEFT JOIN requests r ON cl.request_id = r.id
         WHERE cl.request_id = ?
-        ORDER BY cl.created_at DESC
       `;
       queryParams = [req.params.id];
     }

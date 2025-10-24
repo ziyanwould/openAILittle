@@ -2,7 +2,7 @@
  * @Author: Liu Jiarong
  * @Date: 2024-06-24 19:48:52
  * @LastEditors: Liu Jiarong
- * @LastEditTime: 2025-09-14 00:09:59
+ * @LastEditTime: 2025-10-20 23:15:17
  * @FilePath: /openAILittle/index.js
  * @Description: 
  * @
@@ -639,7 +639,9 @@ function restrictGeminiModelAccess(req, res, next) {
       console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} Restricted user ${userId || userIP} accessed allowed model ${requestedModel}.`);
     }
   }
-
+    console.log('x-user-ip',req.headers['x-user-ip'])
+        console.log('req.ip,',req.ip)
+        console.log('req.body',req.body.user_ip)
   next();
 }
 
