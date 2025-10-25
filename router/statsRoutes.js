@@ -83,24 +83,26 @@ router.get('/stats/usage', async (req, res) => {
     const offset = (page - 1) * pageSize;
 
     try {
-        // 🆕 v1.10.1: 按会话分页策略
-        // 第一步：获取所有符合条件的会话ID（去重并分页）
+        // 🚀 v1.11.3: 极致性能优化 - 减少查询次数,移除窗口函数
         const baseConditions = buildFilterQuery(otherParams, false)
           .replace('SELECT * FROM requests WHERE 1=1', '')
           .replace(' ORDER BY timestamp DESC', '');
 
-        // 统计符合条件的会话总数
-        const conversationCountQuery = `
-          SELECT COUNT(DISTINCT COALESCE(conversation_id, CAST(id AS CHAR CHARSET utf8mb4))) as total
-          FROM requests
-          WHERE 1=1 ${baseConditions}
-        `;
-        const [[{ total: conversationTotal }]] = await pool.query(conversationCountQuery);
-
-        // 获取当前页的会话ID列表（按最新时间排序）
+        // 🔥 优化1: 智能会话分组策略
+        // 策略1: 如果有conversation_id,按conversation_id分组 (准确)
+        // 策略2: 如果没有conversation_id,按user_id+时间窗口分组 (推断)
+        //        - 同一用户,30分钟内的请求算作一个会话
         const conversationIdsQuery = `
-          SELECT COALESCE(conversation_id, CAST(id AS CHAR CHARSET utf8mb4)) as conv_id,
-                 MAX(timestamp) as latest_timestamp
+          SELECT SQL_CALC_FOUND_ROWS
+                 CASE
+                   WHEN conversation_id IS NOT NULL THEN conversation_id
+                   ELSE CONCAT('inferred_', user_id, '_',
+                        FLOOR(UNIX_TIMESTAMP(timestamp) / 1800))
+                 END as conv_id,
+                 MIN(conversation_id) as original_conv_id,
+                 MAX(timestamp) as latest_timestamp,
+                 COUNT(*) as conv_count,
+                 MIN(user_id) as sample_user_id
           FROM requests
           WHERE 1=1 ${baseConditions}
           GROUP BY conv_id
@@ -108,6 +110,9 @@ router.get('/stats/usage', async (req, res) => {
           LIMIT ${pageSize} OFFSET ${offset}
         `;
         const [conversationIds] = await pool.query(conversationIdsQuery);
+
+        // 获取总会话数 (利用SQL_CALC_FOUND_ROWS)
+        const [[{ total: conversationTotal }]] = await pool.query('SELECT FOUND_ROWS() as total');
 
         if (conversationIds.length === 0) {
           return res.json({
@@ -119,41 +124,126 @@ router.get('/stats/usage', async (req, res) => {
           });
         }
 
-        // 第二步：获取这些会话的所有请求记录
-        const convIdList = conversationIds.map(c => `'${c.conv_id}'`).join(',');
+        const convIdList = conversationIds.map(c => {
+          return typeof c.conv_id === 'number' ? c.conv_id : `'${c.conv_id}'`;
+        }).join(',');
+
+        // 🔥 优化2: 移除窗口函数,改用简单JOIN
+        // 直接从已查询的conversationIds中获取统计数据
+        const convStatsMap = {};
+        conversationIds.forEach(c => {
+          convStatsMap[c.conv_id] = c.conv_count;
+        });
+
         const dataQuery = `
-          SELECT r.*,
+          SELECT r.id, r.user_id, r.ip, r.timestamp, r.model, r.route,
+                 r.is_restricted, r.conversation_id, r.is_new_conversation,
+                 r.token_prefix, r.token_suffix,
                  SUBSTRING(r.conversation_id, 1, 8) as conversation_short_id,
-                 COUNT(*) OVER (PARTITION BY COALESCE(r.conversation_id, CAST(r.id AS CHAR CHARSET utf8mb4))) as conversation_request_count,
-                 ROW_NUMBER() OVER (PARTITION BY COALESCE(r.conversation_id, CAST(r.id AS CHAR CHARSET utf8mb4)) ORDER BY r.id ASC) as conversation_order
+                 SUBSTRING(r.content, 1, 200) as content_preview,
+                 CHAR_LENGTH(r.content) as content_length
           FROM requests r
-          WHERE COALESCE(r.conversation_id, CAST(r.id AS CHAR CHARSET utf8mb4)) IN (${convIdList})
+          WHERE IFNULL(r.conversation_id, r.id) IN (${convIdList})
           ORDER BY r.timestamp DESC, r.id ASC
         `;
         const [rows] = await pool.query(dataQuery);
 
-        // 统计总请求数（用于前端参考）
-        const totalRequestsQuery = `
-          SELECT COUNT(*) as total FROM requests WHERE 1=1 ${baseConditions}
-        `;
-        const [[{ total: totalRequests }]] = await pool.query(totalRequestsQuery);
+        // 🔥 优化3: 在应用层计算conversation_order和count (比SQL窗口函数快)
+        const convOrderMap = {};
+        rows.forEach(row => {
+          const convId = row.conversation_id || row.id;
+          if (!convOrderMap[convId]) {
+            convOrderMap[convId] = [];
+          }
+          convOrderMap[convId].push(row);
+        });
 
-        // 🆕 处理会话角色标识 (主请求/子请求)
-        const processedRows = rows.map(row => ({
-          ...row,
-          conversation_role: row.conversation_order === 1 ? 'main' : 'child',
-          is_conversation_main: row.conversation_order === 1
-        }));
+        // 处理会话角色标识 + 添加统计字段
+        const processedRows = rows.map(row => {
+          const convId = row.conversation_id || row.id;
+          const convRows = convOrderMap[convId];
+          const order = convRows.findIndex(r => r.id === row.id) + 1;
+
+          return {
+            ...row,
+            conversation_request_count: convStatsMap[convId] || 1,
+            conversation_order: order,
+            conversation_role: order === 1 ? 'main' : 'child',
+            is_conversation_main: order === 1
+          };
+        });
 
         res.json({
             data: processedRows,           // 当前页会话的所有请求记录
             total: conversationTotal,      // 🆕 会话总数（用于分页）
-            totalRequests: totalRequests,  // 🆕 请求总数（用于显示）
             page: parseInt(page),
             pageSize: parseInt(pageSize)
+            // 🔥 移除totalRequests,改用单独的统计接口 /stats/usage/summary
         });
     } catch (error) {
         console.error('获取使用统计信息失败:', error);
+        res.status(500).json({ error: '服务器内部错误' });
+    }
+});
+
+// 🆕 轻量级统计接口 - 只返回统计数字,不查询具体数据
+router.get('/stats/usage/summary', async (req, res) => {
+    const { ...otherParams } = req.query;
+
+    try {
+        const baseConditions = buildFilterQuery(otherParams, false)
+          .replace('SELECT * FROM requests WHERE 1=1', '')
+          .replace(' ORDER BY timestamp DESC', '');
+
+        // 🔥 智能会话统计: 与主查询接口保持一致的逻辑
+        // 准确统计: 有conversation_id的按conversation_id
+        // 推断统计: 没有conversation_id的按user_id+30分钟时间窗口
+        const summaryQuery = `
+          SELECT
+            COUNT(*) as totalRequests,
+            COUNT(DISTINCT user_id) as totalUsers,
+            COUNT(DISTINCT ip) as totalIPs,
+            MIN(timestamp) as earliestRequest,
+            MAX(timestamp) as latestRequest,
+            SUM(CASE WHEN conversation_id IS NOT NULL THEN 1 ELSE 0 END) as requestsWithConversation,
+            SUM(CASE WHEN conversation_id IS NULL THEN 1 ELSE 0 END) as requestsWithoutConversation
+          FROM requests
+          WHERE 1=1 ${baseConditions}
+        `;
+
+        // 单独查询会话总数 (使用与主查询相同的分组逻辑)
+        const conversationCountQuery = `
+          SELECT COUNT(DISTINCT
+            CASE
+              WHEN conversation_id IS NOT NULL THEN conversation_id
+              ELSE CONCAT('inferred_', user_id, '_',
+                   FLOOR(UNIX_TIMESTAMP(timestamp) / 1800))
+            END
+          ) as totalConversations
+          FROM requests
+          WHERE 1=1 ${baseConditions}
+        `;
+
+        const [[summary]] = await pool.query(summaryQuery);
+        const [[convCount]] = await pool.query(conversationCountQuery);
+
+        const effectiveConversations = convCount.totalConversations;
+
+        res.json({
+            totalRequests: summary.totalRequests,
+            totalConversations: effectiveConversations,
+            totalUsers: summary.totalUsers,
+            totalIPs: summary.totalIPs,
+            earliestRequest: summary.earliestRequest,
+            latestRequest: summary.latestRequest,
+            requestsWithConversation: summary.requestsWithConversation,
+            requestsWithoutConversation: summary.requestsWithoutConversation,
+            averageRequestsPerConversation: effectiveConversations > 0
+              ? Math.round(summary.requestsWithConversation / effectiveConversations * 10) / 10
+              : 0
+        });
+    } catch (error) {
+        console.error('获取统计摘要失败:', error);
         res.status(500).json({ error: '服务器内部错误' });
     }
 });
