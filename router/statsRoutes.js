@@ -1188,7 +1188,7 @@ router.get('/stats/moderation-logs', async (req, res) => {
         SUBSTRING(content, 1, 100) as content_preview,
         risk_level, 
         JSON_EXTRACT(risk_details, '$.risk_type') as risk_types,
-        route, model, processed_at
+        route, model, provider, processed_at
       FROM moderation_logs 
       ${whereClause}
       ORDER BY processed_at DESC

@@ -92,6 +92,21 @@ class ContentModerationMiddleware {
     this.config = moderationConfig;
     this.cache = new Map(); // 缓存审查结果
     this.cacheExpiry = 30 * 60 * 1000; // 缓存30分钟
+    this.frequencyTracker = {
+      user: new Map(),
+      ip: new Map()
+    };
+    this.frequencyTrackerExpiryMs = parseInt(process.env.MODERATION_FREQUENCY_TRACK_EXPIRY_MS || '600000', 10); // 默认10分钟
+    this.minIntervalMs = parseInt(process.env.MODERATION_MIN_INTERVAL_MS || '1000', 10); // 单用户/IP最小间隔
+    this.sentinelBaseUrl = (process.env.SENTINELCN_API_URL || '').trim();
+    this.sentinelSwitchThresholdMs = parseInt(process.env.SENTINELCN_SWITCH_THRESHOLD_MS || '60000', 10); // 小于该间隔改用Sentinel
+    this.sentinelTimeoutMs = parseInt(process.env.SENTINELCN_TIMEOUT_MS || '5000', 10);
+    this.sentinelRetryCooldownMs = parseInt(process.env.SENTINELCN_RETRY_COOLDOWN_MS || '60000', 10);
+    this.sentinelUnavailableUntil = 0;
+    this.sentinelKeywordList = (process.env.SENTINELCN_TRIGGER_KEYWORDS || '自杀,自残,无痛,炸弹,爆炸,恐怖,袭击,枪支,毒品,色情,未成年人,强奸,暴力,恐怖袭击,bomb,explosive,terror,kill myself,suicide,weapon,child porn,sexual assault,drug trafficking')
+      .split(',')
+      .map(keyword => keyword.trim())
+      .filter(Boolean);
   }
 
   /**
@@ -159,6 +174,137 @@ class ContentModerationMiddleware {
   }
 
   /**
+   * 判断SentinelCN服务是否可用
+   */
+  canUseSentinel() {
+    if (!this.sentinelBaseUrl) {
+      return false;
+    }
+    if (this.sentinelUnavailableUntil && Date.now() < this.sentinelUnavailableUntil) {
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * 构建SentinelCN服务的完整URL
+   */
+  buildSentinelUrl(pathname = '/moderate') {
+    if (!this.sentinelBaseUrl) {
+      return null;
+    }
+    try {
+      const base = this.sentinelBaseUrl.endsWith('/') ? this.sentinelBaseUrl : `${this.sentinelBaseUrl}/`;
+      const url = new URL(pathname.startsWith('/') ? pathname : `/${pathname}`, base);
+      return url.toString();
+    } catch (error) {
+      console.error('Invalid SENTINELCN_API_URL:', error.message);
+      return null;
+    }
+  }
+
+  markSentinelFailure() {
+    this.sentinelUnavailableUntil = Date.now() + this.sentinelRetryCooldownMs;
+  }
+
+  markSentinelSuccess() {
+    this.sentinelUnavailableUntil = 0;
+  }
+
+  /**
+   * 检查请求频率
+   */
+  checkFrequency(userId, clientIP, now) {
+    const intervals = [];
+
+    if (userId) {
+      const info = this.frequencyTracker.user.get(userId);
+      if (info && typeof info.timestamp === 'number') {
+        intervals.push(now - info.timestamp);
+      }
+    }
+
+    if (clientIP) {
+      const info = this.frequencyTracker.ip.get(clientIP);
+      if (info && typeof info.timestamp === 'number') {
+        intervals.push(now - info.timestamp);
+      }
+    }
+
+    const minInterval = intervals.length > 0 ? Math.min(...intervals) : null;
+
+    return {
+      minInterval,
+      isTooFrequent: minInterval !== null && minInterval < this.minIntervalMs
+    };
+  }
+
+  /**
+   * 记录请求时间，用于频率控制
+   */
+  updateFrequencyTracker(userId, clientIP, timestamp) {
+    if (userId) {
+      this.frequencyTracker.user.set(userId, { timestamp });
+    }
+    if (clientIP) {
+      this.frequencyTracker.ip.set(clientIP, { timestamp });
+    }
+  }
+
+  /**
+   * 清理过期的频率记录
+   */
+  cleanFrequencyTracker() {
+    if (this.frequencyTrackerExpiryMs <= 0) {
+      return;
+    }
+
+    const expireBefore = Date.now() - this.frequencyTrackerExpiryMs;
+    const cleanMap = (map) => {
+      for (const [key, info] of map.entries()) {
+        if (!info || typeof info.timestamp !== 'number' || info.timestamp < expireBefore) {
+          map.delete(key);
+        }
+      }
+    };
+
+    cleanMap(this.frequencyTracker.user);
+    cleanMap(this.frequencyTracker.ip);
+  }
+
+  /**
+   * 针对敏感关键词强制使用 SentinelCN
+   */
+  shouldForceSentinelForContent(content) {
+    if (!content || !content.trim() || !this.sentinelKeywordList.length) {
+      return false;
+    }
+
+    const normalized = content.toLowerCase();
+    return this.sentinelKeywordList.some(keyword => {
+      if (!keyword) return false;
+      return normalized.includes(keyword.toLowerCase());
+    });
+  }
+
+  /**
+   * 深拷贝审核结果，避免缓存引用被修改
+   */
+  cloneModerationResult(result) {
+    if (result === null || result === undefined) {
+      return result;
+    }
+    if (typeof structuredClone === 'function') {
+      return structuredClone(result);
+    }
+    try {
+      return JSON.parse(JSON.stringify(result));
+    } catch (_) {
+      return result;
+    }
+  }
+
+  /**
    * 获取当前配置（优先从数据库获取）
    */
   async getCurrentConfig() {
@@ -190,7 +336,7 @@ class ContentModerationMiddleware {
   /**
    * 调用智谱AI内容审查API
    */
-  async callModerationAPI(content) {
+  async callZhipuModerationAPI(content) {
     try {
       const config = await this.getCurrentConfig();
       const response = await fetch(config.global.apiEndpoint, {
@@ -203,19 +349,30 @@ class ContentModerationMiddleware {
           model: 'moderation', // 智谱AI内容安全API使用moderation模型
           input: content // 纯文本字符串，最大输入长度：2000 字符
         }),
-        signal: AbortSignal.timeout(config.global.timeout)
+        signal: this.getTimeoutSignal(config.global.timeout)
       });
 
-      console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] API Response status: ${response.status}`);
+      console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] Zhipu API Response status: ${response.status}`);
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.error(`${moment().format('YYYY-MM-DD HH:mm:ss')} Content moderation API error: ${response.status} ${response.statusText}, Body: ${errorText}`);
-        return { safe: true, reason: 'API_ERROR' }; // API错误时默认通过
+        console.error(`${moment().format('YYYY-MM-DD HH:mm:ss')} Content moderation API error (Zhipu): ${response.status} ${response.statusText}, Body: ${errorText}`);
+        return {
+          safe: true,
+          reason: 'API_ERROR',
+          details: {
+            status: response.status,
+            statusText: response.statusText,
+            body: errorText
+          },
+          provider: 'ZHIPU',
+          providerSequence: ['ZHIPU'],
+          ok: false
+        }; // API错误时默认通过
       }
 
       const result = await response.json();
-      console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] Raw API response: ${JSON.stringify(result)}`);
+      console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] Zhipu Raw API response: ${JSON.stringify(result)}`);
       
       // 根据智谱AI内容安全API官方响应格式解析结果
       // 官方响应格式: { result_list: [ { content_type: "text", risk_level: "PASS/REVIEW/REJECT", risk_type: [] } ] }
@@ -239,7 +396,10 @@ class ContentModerationMiddleware {
             content_type: firstResult.content_type,
             risk_level: riskLevel,
             risk_type: riskTypes
-          }
+          },
+          provider: 'ZHIPU',
+          providerSequence: ['ZHIPU'],
+          ok: true
         };
       }
 
@@ -249,18 +409,190 @@ class ContentModerationMiddleware {
         return {
           safe: !flagged,
           reason: flagged ? 'FLAGGED' : 'SAFE',
-          details: result
+          details: result,
+          provider: 'ZHIPU',
+          providerSequence: ['ZHIPU'],
+          ok: true
         };
       }
 
       // 默认情况：如果无法解析响应，默认通过
-      console.warn(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] Unknown response format, defaulting to safe`);
-      return { safe: true, reason: 'UNKNOWN_FORMAT' };
+      console.warn(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] Unknown response format from Zhipu, defaulting to safe`);
+      return { safe: true, reason: 'UNKNOWN_FORMAT', provider: 'ZHIPU', providerSequence: ['ZHIPU'], ok: true };
 
     } catch (error) {
-      console.error(`${moment().format('YYYY-MM-DD HH:mm:ss')} Content moderation error:`, error.message);
-      return { safe: true, reason: 'ERROR' }; // 发生错误时默认通过
+      console.error(`${moment().format('YYYY-MM-DD HH:mm:ss')} Content moderation error (Zhipu):`, error.message);
+      return { safe: true, reason: 'ERROR', details: { error: error.message }, provider: 'ZHIPU', providerSequence: ['ZHIPU'], ok: false }; // 发生错误时默认通过
     }
+  }
+
+  /**
+   * 调用SentinelCN内容审查服务
+   */
+  async callSentinelModerationAPI(content, { userId } = {}) {
+    const endpoint = this.buildSentinelUrl('/moderate');
+    if (!endpoint) {
+      return {
+        safe: true,
+        reason: 'SENTINEL_URL_INVALID',
+        provider: 'SENTINELCN',
+        providerSequence: ['SENTINELCN'],
+        ok: false
+      };
+    }
+
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          messages: [
+            {
+              role: 'user',
+              content: content
+            }
+          ],
+          user_id: userId || undefined
+        }),
+        signal: this.getTimeoutSignal(this.sentinelTimeoutMs)
+      });
+
+      console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] SentinelCN Response status: ${response.status}`);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`${moment().format('YYYY-MM-DD HH:mm:ss')} Content moderation API error (SentinelCN): ${response.status} ${response.statusText}, Body: ${errorText}`);
+        return {
+          safe: true,
+          reason: `SENTINEL_ERROR:${response.status}`,
+          details: {
+            status: response.status,
+            statusText: response.statusText,
+            body: errorText
+          },
+          provider: 'SENTINELCN',
+          providerSequence: ['SENTINELCN'],
+          ok: false
+        };
+      }
+
+      const result = await response.json();
+      console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] SentinelCN Raw response: ${JSON.stringify(result)}`);
+
+      let safe = true;
+      let riskLevel = 'PASS';
+      let riskTypes = [];
+      let reason = 'SentinelCN: SAFE';
+
+      const extractLevel = (entry) => {
+        if (!entry) return null;
+        if (typeof entry.level === 'number') return entry.level;
+        if (typeof entry.level === 'string' && !isNaN(Number(entry.level))) {
+          return Number(entry.level);
+        }
+        return null;
+      };
+
+      if (Array.isArray(result.contentFilter) && result.contentFilter.length > 0) {
+        const entry = result.contentFilter[0];
+        const level = extractLevel(entry);
+        const safety = (entry.safety || '').toUpperCase();
+        riskTypes = Array.isArray(entry.categories) ? entry.categories : [];
+        safe = false;
+        if (level !== null) {
+          if (level <= 0) {
+            riskLevel = 'REJECT';
+          } else if (level === 1) {
+            riskLevel = 'REVIEW';
+          } else {
+            riskLevel = safety === 'CONTROVERSIAL' ? 'REVIEW' : 'REJECT';
+          }
+        } else {
+          riskLevel = safety === 'CONTROVERSIAL' ? 'REVIEW' : 'REJECT';
+        }
+        reason = `SentinelCN ${entry.safety || 'Unsafe'}: ${riskTypes.length > 0 ? riskTypes.join(', ') : '内容安全检查'}`;
+      } else if (result.result) {
+        const res = result.result;
+        const safety = (res.safety || '').toUpperCase();
+        const level = extractLevel(res);
+        riskTypes = Array.isArray(res.categories) ? res.categories : [];
+
+        if (level !== null) {
+          if (level <= 1) {
+            safe = false;
+            riskLevel = level === 1 ? 'REVIEW' : 'REJECT';
+            reason = `SentinelCN Level ${level}: ${riskTypes.length > 0 ? riskTypes.join(', ') : '内容安全检查'}`;
+          } else {
+            safe = true;
+            riskLevel = 'PASS';
+            reason = 'SentinelCN: SAFE';
+          }
+        } else if (safety === 'UNSAFE') {
+          safe = false;
+          riskLevel = 'REJECT';
+          reason = `SentinelCN Unsafe: ${riskTypes.length > 0 ? riskTypes.join(', ') : '内容安全检查'}`;
+        } else if (safety === 'CONTROVERSIAL') {
+          safe = false;
+          riskLevel = 'REVIEW';
+          reason = `SentinelCN Controversial: ${riskTypes.length > 0 ? riskTypes.join(', ') : '内容安全检查'}`;
+        } else {
+          safe = true;
+          riskLevel = 'PASS';
+          reason = 'SentinelCN: SAFE';
+        }
+      }
+
+      return {
+        safe,
+        reason,
+        details: result,
+        provider: 'SENTINELCN',
+        providerSequence: ['SENTINELCN'],
+        ok: true,
+        derivedRiskLevel: riskLevel,
+        derivedRiskTypes: riskTypes
+      };
+    } catch (error) {
+      console.error(`${moment().format('YYYY-MM-DD HH:mm:ss')} Content moderation error (SentinelCN):`, error.message);
+      return {
+        safe: true,
+        reason: 'SENTINEL_ERROR',
+        details: { error: error.message },
+        provider: 'SENTINELCN',
+        providerSequence: ['SENTINELCN'],
+        ok: false
+      };
+    }
+  }
+
+  /**
+   * 综合调用内容审查（按策略选择Zhipu或SentinelCN）
+   */
+  async callModerationAPI(content, { preferSentinel = false, userId } = {}) {
+    const providersTried = [];
+
+    if (preferSentinel && this.canUseSentinel()) {
+      providersTried.push('SENTINELCN');
+      const sentinelResult = await this.callSentinelModerationAPI(content, { userId });
+      sentinelResult.providerSequence = providersTried.slice();
+      sentinelResult.provider = providersTried.join('->');
+
+      if (sentinelResult.ok) {
+        this.markSentinelSuccess();
+        return sentinelResult;
+      }
+
+      this.markSentinelFailure();
+      console.warn(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] SentinelCN unavailable, falling back to Zhipu`);
+    }
+
+    providersTried.push('ZHIPU');
+    const zhipuResult = await this.callZhipuModerationAPI(content);
+    zhipuResult.providerSequence = providersTried.slice();
+    zhipuResult.provider = providersTried.join('->');
+    return zhipuResult;
   }
 
   /**
@@ -326,16 +658,37 @@ class ContentModerationMiddleware {
    * 获取原始路由前缀（优先使用 baseUrl，其次 originalUrl，最后 path）
    * 目的：在被挂载的子路由（如 /chatnio、/freeopenai）下，不被 Express 截断成 /v1
    */
-  getOriginalRoutePrefixFromReq(req) {
+  async getOriginalRoutePrefixFromReq(req) {
     // 优先使用 baseUrl（挂载点），它能保留原始一级路由
-    if (req.baseUrl && this.config.routes[req.baseUrl]) {
-      return req.baseUrl;
+    if (req.baseUrl) {
+      const baseConfig = await this.getRouteConfig(req.baseUrl);
+      if (baseConfig) {
+        return req.baseUrl;
+      }
+      if (this.config.routes[req.baseUrl]) {
+        return req.baseUrl;
+      }
     }
     // 其次尝试 originalUrl（未被修改的完整路径）
-    const fromOriginal = this.getRoutePrefix(req.originalUrl || '');
+    const fromOriginal = await this.getRoutePrefix(req.originalUrl || '');
     if (fromOriginal) return fromOriginal;
     // 最后回退到当前 path
-    return this.getRoutePrefix(req.path || '');
+    return await this.getRoutePrefix(req.path || '');
+  }
+
+  /**
+   * 获取带超时的AbortSignal（兼容旧版本Node）
+   */
+  getTimeoutSignal(timeout) {
+    try {
+      if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+        return AbortSignal.timeout(timeout);
+      }
+    } catch (_) {}
+
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), timeout);
+    return controller.signal;
   }
 
   /**
@@ -355,8 +708,8 @@ class ContentModerationMiddleware {
       
       try {
         // 计算用于配置匹配与日志展示的两个前缀（此处二者一致：原始前缀）
-        const routePrefixOriginal = this.getOriginalRoutePrefixFromReq(req);
-        const routePrefix = routePrefixOriginal; // 用于配置匹配
+        const routePrefixOriginal = await this.getOriginalRoutePrefixFromReq(req);
+        const routePrefix = routePrefixOriginal || ''; // 用于配置匹配
         const model = this.extractModelName(req.body);
         userId = this.extractUserId(req);
         clientIP = this.getClientIP(req);
@@ -410,26 +763,60 @@ class ContentModerationMiddleware {
 
         console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] Starting moderation check for route: ${routePrefix}, model: ${model}`);
 
-        // 4. 检查缓存
+        // 4. 请求频率控制
+        const requestTimestamp = Date.now();
+        const frequencyInfo = this.checkFrequency(userId, clientIP, requestTimestamp);
+        const sentinelPreferredByFrequency = frequencyInfo.minInterval !== null && frequencyInfo.minInterval < this.sentinelSwitchThresholdMs;
+        const sentinelAvailable = this.canUseSentinel();
+        const shouldForceSentinelByContent = this.shouldForceSentinelForContent(content);
+        const sentinelPreferred = shouldForceSentinelByContent || sentinelPreferredByFrequency;
+        const sentinelAttemptAllowed = sentinelAvailable && sentinelPreferred;
+
+        if (shouldForceSentinelByContent && !sentinelAvailable) {
+          console.warn(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] SentinelCN requested by keyword but currently unavailable, falling back to Zhipu`);
+        }
+
+        console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] Frequency info - minInterval(ms): ${frequencyInfo.minInterval !== null ? frequencyInfo.minInterval : 'N/A'}, preferSentinelByFrequency: ${sentinelPreferredByFrequency}, forceSentinelByContent: ${shouldForceSentinelByContent}, sentinelAttemptAllowed: ${sentinelAttemptAllowed}`);
+
+        if (frequencyInfo.isTooFrequent) {
+          console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] ❌ Request blocked due to frequency limit (${frequencyInfo.minInterval}ms < ${this.minIntervalMs}ms)`);
+          const frequencyResponse = this.config.frequencyLimitResponse || {};
+          this.updateFrequencyTracker(userId, clientIP, requestTimestamp);
+          return res.status(429).json({
+            error: {
+              code: frequencyResponse.code || 4295,
+              message: frequencyResponse.message || '内容审核请求过于频繁，请稍后再试。',
+              details: frequencyResponse.details || '单个用户或IP的内容审核频率需低于每秒一次'
+            }
+          });
+        }
+
+        this.updateFrequencyTracker(userId, clientIP, requestTimestamp);
+
+        // 5. 检查缓存
         contentHash = this.generateContentHash(content);
         const cached = this.cache.get(contentHash);
         console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] Cache check - hash: ${contentHash}, cached: ${!!cached}`);
         
         if (cached && Date.now() - cached.timestamp < this.cacheExpiry) {
-          console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] Using cached result: ${JSON.stringify(cached.result)}`);
+        moderationResult = this.cloneModerationResult(cached.result);
+        moderationResult.fromCache = true;
+        moderationResult.preferredProvider = sentinelPreferred ? 'SENTINELCN' : 'ZHIPU';
+        moderationResult.sentinelAttempted = !!moderationResult.sentinelAttempted;
+        moderationResult.frequencyInfo = frequencyInfo;
+
+        console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] Using cached result (provider: ${moderationResult.provider || 'UNKNOWN'}, preferred: ${moderationResult.preferredProvider}, sentinelAttempted: ${moderationResult.sentinelAttempted})`);
           
-          // 即使使用缓存结果，也要记录到数据库
-          moderationResult = cached.result;
           await this.recordModerationResult(userId, clientIP, content, contentHash, moderationResult, routePrefix, model, req);
           
-          if (!cached.result.safe) {
-            console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] Content moderation failed (cached): ${cached.result.reason}`);
+          if (!moderationResult.safe) {
+            console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] Content moderation failed (cached): ${moderationResult.reason}`);
             return res.status(400).json({
               error: {
                 code: this.config.errorResponse.code,
                 message: this.config.errorResponse.message,
                 details: this.config.errorResponse.details,
-                reason: cached.result.reason
+                reason: moderationResult.reason
               }
             });
           }
@@ -437,18 +824,25 @@ class ContentModerationMiddleware {
           return next();
         }
 
-        // 5. 调用审查API
-        console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] Calling moderation API for content: "${content.substring(0, 100)}${content.length > 100 ? '...' : ''}"`);
-        moderationResult = await this.callModerationAPI(content);
-        console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] API result: ${JSON.stringify(moderationResult)}`);
+        // 6. 调用审查API
+        console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] Calling moderation API for content: "${content.substring(0, 100)}${content.length > 100 ? '...' : ''}" (preferred: ${sentinelPreferred ? 'SentinelCN' : 'Zhipu'}, attemptSentinel: ${sentinelAttemptAllowed})`);
+        const rawModerationResult = await this.callModerationAPI(content, { preferSentinel: sentinelAttemptAllowed, userId });
+        console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] API result: ${JSON.stringify(rawModerationResult)}`);
         
-        // 6. 缓存结果
+        // 7. 缓存结果
         this.cache.set(contentHash, {
-          result: moderationResult,
+          result: this.cloneModerationResult(rawModerationResult),
           timestamp: Date.now()
         });
 
-        // 7. 记录审核结果到数据库并更新违规计数
+        moderationResult = this.cloneModerationResult(rawModerationResult);
+        moderationResult.preferredProvider = sentinelPreferred ? 'SENTINELCN' : 'ZHIPU';
+        moderationResult.sentinelAttempted = sentinelAttemptAllowed;
+        moderationResult.frequencyInfo = frequencyInfo;
+
+        console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] Provider used: ${moderationResult.provider}, preferred: ${moderationResult.preferredProvider}, sentinelAttempted: ${sentinelAttemptAllowed}, forceByContent: ${shouldForceSentinelByContent}, preferByFrequency: ${sentinelPreferredByFrequency}`);
+
+        // 8. 记录审核结果到数据库并更新违规计数
         await this.recordModerationResult(userId, clientIP, content, contentHash, moderationResult, routePrefix, model, req);
 
         // 清理过期缓存
@@ -456,7 +850,7 @@ class ContentModerationMiddleware {
           this.cleanExpiredCache();
         }
 
-        // 8. 检查审查结果
+        // 9. 检查审查结果
         if (!moderationResult.safe) {
           console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] ❌ Content moderation FAILED: ${moderationResult.reason}`);
           return res.status(400).json({
@@ -469,7 +863,7 @@ class ContentModerationMiddleware {
           });
         }
 
-        console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] ✅ Content moderation PASSED for route: ${routePrefix}, model: ${model}`);
+        console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] ✅ Content moderation PASSED for route: ${routePrefix}, model: ${model}, provider: ${moderationResult.provider}`);
         next();
 
       } catch (error) {
@@ -478,8 +872,18 @@ class ContentModerationMiddleware {
         // 即使出错也尝试记录基本信息
         if (userId && clientIP && moderationResult) {
           try {
+            const fallbackResult = {
+              safe: true,
+              reason: 'ERROR',
+              details: { error: error.message },
+              provider: moderationResult.provider || 'UNKNOWN',
+              providerSequence: moderationResult.providerSequence || [],
+              preferredProvider: moderationResult.preferredProvider || null,
+              sentinelAttempted: !!moderationResult.sentinelAttempted,
+              frequencyInfo: moderationResult.frequencyInfo || null
+            };
             await this.recordModerationResult(userId, clientIP, 'ERROR_CONTENT', contentHash || 'ERROR_HASH', 
-              { safe: true, reason: 'ERROR', details: { error: error.message } }, 'ERROR_ROUTE', 'ERROR_MODEL', req);
+              fallbackResult, 'ERROR_ROUTE', 'ERROR_MODEL', req);
           } catch (dbError) {
             console.error('Failed to record error to database:', dbError);
           }
@@ -503,7 +907,9 @@ class ContentModerationMiddleware {
       
       // 确定风险等级
       let riskLevel = 'PASS';
-      if (!moderationResult.safe) {
+      if (moderationResult && moderationResult.derivedRiskLevel) {
+        riskLevel = moderationResult.derivedRiskLevel;
+      } else if (!moderationResult.safe) {
         if (moderationResult.details && moderationResult.details.risk_level) {
           riskLevel = moderationResult.details.risk_level;
         } else if (moderationResult.reason.includes('REJECT')) {
@@ -517,13 +923,38 @@ class ContentModerationMiddleware {
       
       // 记录审核日志
       // 补充一些元信息进 riskDetails，保留原 API 详情结构
-      const riskDetails = moderationResult.details || {};
+      let riskDetails = {};
+      if (moderationResult.details && typeof moderationResult.details === 'object') {
+        riskDetails = { ...moderationResult.details };
+      } else if (moderationResult.details !== undefined) {
+        riskDetails = { value: moderationResult.details };
+      }
+
+      const providerValue = (moderationResult.provider || 'UNKNOWN').toUpperCase();
+
+      const meta = {
+        ...(riskDetails.meta || {}),
+        baseUrl: req && req.baseUrl ? req.baseUrl : '',
+        originalUrl: req && req.originalUrl ? req.originalUrl : '',
+        path: req && req.path ? req.path : '',
+        moderationProvider: providerValue,
+        preferredProvider: moderationResult.preferredProvider ? String(moderationResult.preferredProvider).toUpperCase() : null,
+        providerSequence: Array.isArray(moderationResult.providerSequence)
+          ? moderationResult.providerSequence.map(item => typeof item === 'string' ? item.toUpperCase() : item)
+          : [],
+        fromCache: !!moderationResult.fromCache,
+        sentinelAttempted: !!moderationResult.sentinelAttempted,
+        frequencyMinIntervalMs: moderationResult.frequencyInfo && typeof moderationResult.frequencyInfo.minInterval === 'number'
+          ? moderationResult.frequencyInfo.minInterval
+          : null
+      };
+
+      if (Array.isArray(moderationResult.derivedRiskTypes)) {
+        meta.derivedRiskTypes = moderationResult.derivedRiskTypes;
+      }
+
       try {
-        riskDetails.meta = {
-          baseUrl: req && req.baseUrl ? req.baseUrl : '',
-          originalUrl: req && req.originalUrl ? req.originalUrl : '',
-          path: req && req.path ? req.path : ''
-        };
+        riskDetails.meta = meta;
       } catch (_) {}
 
       const logId = await logModerationResult({
@@ -536,7 +967,8 @@ class ContentModerationMiddleware {
         // 在数据库中 route 字段写入原始路由前缀（如 /chatnio），而非重写后的 /v1
         route: routePrefix,
         model: model,
-        apiResponse: JSON.stringify(moderationResult)
+        apiResponse: JSON.stringify(moderationResult),
+        provider: providerValue
       });
       
       // 更新违规计数
@@ -587,6 +1019,10 @@ const moderationMiddleware = new ContentModerationMiddleware();
 setInterval(() => {
   moderationMiddleware.cleanExpiredCache();
 }, 10 * 60 * 1000); // 每10分钟清理一次
+
+setInterval(() => {
+  moderationMiddleware.cleanFrequencyTracker();
+}, 5 * 60 * 1000); // 每5分钟清理一次频率记录
 
 setInterval(async () => {
   await moderationMiddleware.reloadConfig();

@@ -170,6 +170,13 @@ module.exports = {
     details: '您的请求包含不当内容，已被安全系统拦截。请修改内容后重新提交。'
   },
 
+  // 频率限制触发时的错误响应配置
+  frequencyLimitResponse: {
+    code: 4295,
+    message: '内容审核请求过于频繁，请稍后再试。',
+    details: '单个用户或IP的内容审核频率需低于每秒一次。'
+  },
+
   // 审查内容提取配置
   contentExtraction: {
     // 从请求体中提取需要审查的内容字段

@@ -426,4 +426,10 @@ module.exports = {
       ],
       totalLimit: 500,
     },
+    'gpt-5-nano': {
+      limits: [
+        { windowMs: 1 * 60 * 1000, max: 5 },  // 1分钟最多5次
+      ],
+      dailyLimit: 1000,
+    },
   };

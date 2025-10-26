@@ -126,16 +126,26 @@ async function initializeDatabase() {
         route VARCHAR(50),
         model VARCHAR(50),
         api_response TEXT,
+        provider VARCHAR(64) DEFAULT 'UNKNOWN',
         processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         INDEX idx_moderation_user (user_id),
         INDEX idx_moderation_ip (ip),
         INDEX idx_moderation_risk (risk_level),
         INDEX idx_moderation_time (processed_at),
         INDEX idx_moderation_hash (content_hash),
+        INDEX idx_moderation_provider (provider),
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
     console.log('✓ moderation_logs 表初始化完成');
+
+    // 兼容旧版本，补充 provider 列
+    const [providerColumn] = await connection.query(`SHOW COLUMNS FROM moderation_logs LIKE 'provider'`);
+    if (providerColumn.length === 0) {
+      await connection.query(`ALTER TABLE moderation_logs ADD COLUMN provider VARCHAR(64) DEFAULT 'UNKNOWN' AFTER api_response`);
+      await connection.query(`CREATE INDEX idx_moderation_provider ON moderation_logs (provider)`);
+      console.log('✓ moderation_logs 表新增 provider 列');
+    }
 
     // 用户/IP标记管理表 (新增)
     await connection.query(`
@@ -581,14 +591,14 @@ async function syncRestrictedModels(modelList) {
  * 记录内容审核结果
  */
 async function logModerationResult(params) {
-  const { userId, ip, content, contentHash, riskLevel, riskDetails, route, model, apiResponse } = params;
+  const { userId, ip, content, contentHash, riskLevel, riskDetails, route, model, apiResponse, provider } = params;
   
   try {
     const [result] = await pool.query(`
       INSERT INTO moderation_logs 
-      (user_id, ip, content, content_hash, risk_level, risk_details, route, model, api_response)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [userId, ip, content, contentHash, riskLevel, JSON.stringify(riskDetails), route, model, apiResponse]);
+      (user_id, ip, content, content_hash, risk_level, risk_details, route, model, api_response, provider)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [userId, ip, content, contentHash, riskLevel, JSON.stringify(riskDetails), route, model, apiResponse, provider || 'UNKNOWN']);
     
     return result.insertId;
   } catch (err) {
