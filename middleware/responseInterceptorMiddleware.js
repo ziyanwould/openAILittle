@@ -11,19 +11,10 @@
  * 状态: 生产环境使用
  */
 const { pool } = require('../db');
+const { CacheFactory } = require('../lib/cacheManager');
 
-// 响应数据缓存，用于存储对话数据
-const responseCache = new Map();
-
-// 清理过期缓存（防止内存泄漏）
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, value] of responseCache.entries()) {
-    if (now - value.timestamp > 5 * 60 * 1000) { // 5分钟过期
-      responseCache.delete(key);
-    }
-  }
-}, 60 * 1000); // 每分钟清理一次
+// 响应数据缓存，用于存储对话数据（优化：使用LRU缓存管理器）
+const responseCache = CacheFactory.createResponseCache();
 
 /**
  * 判断是否为时间戳格式的userId

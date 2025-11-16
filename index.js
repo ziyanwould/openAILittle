@@ -42,6 +42,7 @@ const contentModerationMiddleware = require('./middleware/contentModerationMiddl
 const responseInterceptorMiddleware = require('./middleware/responseInterceptorMiddleware'); // 引入响应拦截中间件
 const configManager = require('./middleware/configManager'); // 引入配置管理器
 const { initializeSystemConfigs, getNotificationConfigs, pool, getConciseModeConfig, getConciseModeUpdatedAt } = require('./db'); // 引入系统配置初始化与数据库连接池
+const { CacheFactory } = require('./lib/cacheManager'); // 🆕 引入统一缓存管理器
 
 const chatnioRateLimiters = {}; // 用于存储 chatnio 的限流器
 // 在文件开头引入 dotenv
@@ -50,24 +51,39 @@ require('dotenv').config();
 // 统一管理提示信息
 const UPGRADE_MESSAGE = process.env.UPGRADE_MESSAGE || '';
 
-// 模型白名单（从数据库加载，文件为默认回退）
-let robotModelWhitelist = [];
-let freelyaiModelWhitelist = [];
-let lastModelWhitelistLoad = 0;
-const MODEL_WL_TTL_MS = 60 * 1000; // 60秒刷新一次
+// 模型白名单（优化：使用LRU缓存，从数据库加载，文件为默认回退）
+const modelWhitelistCache = CacheFactory.createModelWhitelistCache();
 const { getModelWhitelists } = require('./db');
 
 async function loadModelWhitelists(force = false) {
-  const now = Date.now();
-  if (!force && (now - lastModelWhitelistLoad) < MODEL_WL_TTL_MS && robotModelWhitelist.length && freelyaiModelWhitelist.length) return;
+  if (!force && modelWhitelistCache.has('whitelists')) {
+    return modelWhitelistCache.get('whitelists');
+  }
+
   try {
     const data = await getModelWhitelists();
-    robotModelWhitelist = Array.isArray(data?.ROBOT) ? data.ROBOT : [];
-    freelyaiModelWhitelist = Array.isArray(data?.FREELYAI) ? data.FREELYAI : [];
-    lastModelWhitelistLoad = now;
+    const whitelists = {
+      ROBOT: Array.isArray(data?.ROBOT) ? data.ROBOT : [],
+      FREELYAI: Array.isArray(data?.FREELYAI) ? data.FREELYAI : []
+    };
+    modelWhitelistCache.set('whitelists', whitelists);
+    return whitelists;
   } catch (e) {
     console.error('加载模型白名单失败:', e.message);
+    return { ROBOT: [], FREELYAI: [] };
   }
+}
+
+// 辅助函数：获取ROBOT白名单
+function getRobotModelWhitelist() {
+  const cached = modelWhitelistCache.get('whitelists');
+  return cached ? cached.ROBOT : [];
+}
+
+// 辅助函数：获取FREELYAI白名单
+function getFreelyaiModelWhitelist() {
+  const cached = modelWhitelistCache.get('whitelists');
+  return cached ? cached.FREELYAI : [];
 }
 
 // Node.js 18 以上版本支持原生的 fetch API
@@ -75,12 +91,102 @@ const app = express();
 
 app.use(bodyParser.json({ limit: '100mb' }));
 
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
+// 完整的健康检查端点（优化：检查数据库、内存、磁盘等）
+app.get('/health', async (req, res) => {
+  const health = {
+    status: 'healthy',
     service: 'main',
-    time: new Date().toISOString()
-  });
+    timestamp: new Date().toISOString(),
+    checks: {}
+  };
+
+  try {
+    // 1. 检查数据库连接
+    try {
+      const [[dbCheck]] = await pool.query('SELECT 1 as ok');
+      health.checks.database = {
+        status: dbCheck.ok ? 'ok' : 'fail',
+        message: 'Database connection successful'
+      };
+    } catch (dbError) {
+      health.status = 'unhealthy';
+      health.checks.database = {
+        status: 'fail',
+        message: `Database error: ${dbError.message}`
+      };
+    }
+
+    // 2. 检查内存使用
+    const memUsage = process.memoryUsage();
+    const heapUsedMB = Math.round(memUsage.heapUsed / 1024 / 1024);
+    const heapTotalMB = Math.round(memUsage.heapTotal / 1024 / 1024);
+    const usagePercent = ((memUsage.heapUsed / memUsage.heapTotal) * 100).toFixed(2);
+
+    health.checks.memory = {
+      status: usagePercent < 90 ? 'ok' : 'warning',
+      heapUsed: `${heapUsedMB}MB`,
+      heapTotal: `${heapTotalMB}MB`,
+      usagePercent: `${usagePercent}%`,
+      warning: usagePercent >= 90
+    };
+
+    if (usagePercent >= 95) {
+      health.status = 'unhealthy';
+    }
+
+    // 3. 检查日志文件大小
+    try {
+      const logPath = require('path').join(__dirname, 'logs', 'console.log');
+      const logStats = require('fs').statSync(logPath);
+      const logSizeMB = Math.round(logStats.size / 1024 / 1024);
+
+      health.checks.logs = {
+        status: logSizeMB < 500 ? 'ok' : 'warning',
+        size: `${logSizeMB}MB`,
+        path: logPath,
+        warning: logSizeMB >= 500
+      };
+    } catch (logError) {
+      health.checks.logs = {
+        status: 'info',
+        message: 'Log file not found or not accessible'
+      };
+    }
+
+    // 4. 系统运行时间
+    const uptimeSeconds = Math.floor(process.uptime());
+    const uptimeHours = Math.floor(uptimeSeconds / 3600);
+    const uptimeMinutes = Math.floor((uptimeSeconds % 3600) / 60);
+
+    health.checks.uptime = {
+      status: 'ok',
+      seconds: uptimeSeconds,
+      formatted: `${uptimeHours}h ${uptimeMinutes}m`
+    };
+
+    // 5. 缓存统计（可选）
+    try {
+      health.checks.cache = {
+        status: 'ok',
+        responseCache: responseCache.getStats ? responseCache.getStats() : 'N/A',
+        modelWhitelist: modelWhitelistCache.getStats ? modelWhitelistCache.getStats() : 'N/A'
+      };
+    } catch (cacheError) {
+      health.checks.cache = { status: 'info', message: 'Cache stats unavailable' };
+    }
+
+    // 根据健康状态返回相应的HTTP状态码
+    const statusCode = health.status === 'healthy' ? 200 : 503;
+    res.status(statusCode).json(health);
+
+  } catch (error) {
+    res.status(503).json({
+      status: 'unhealthy',
+      service: 'main',
+      timestamp: new Date().toISOString(),
+      error: error.message
+    });
+  }
 });
 
 // 为辅助模型设置限流配置
@@ -170,17 +276,17 @@ function extractLastUserTextFromBodyStr(bodyStr) {
   return null;
 }
 
-// 创建一个缓存来存储最近的请求内容
-const recentRequestsCache = new Map();
+// 创建一个缓存来存储最近的请求内容（优化：使用LRU缓存）
+const recentRequestsCache = CacheFactory.createConfigCache();
 
-// 设置缓存过期时间（例如，5 分钟）
+// 设置缓存过期时间（例如，5 分钟）- 已集成到LRU缓存中
 const cacheExpirationTimeMs = 5 * 60 * 1000;
 
-// 用于存储每个用户的最近请求时间和模型
-const userRequestHistory = new Map();
+// 用于存储每个用户的最近请求时间和模型（优化：使用LRU缓存）
+const userRequestHistory = CacheFactory.createConfigCache();
 
-// 用于存储最近请求内容的哈希值和时间戳
-const recentRequestContentHashes = new Map();
+// 用于存储最近请求内容的哈希值和时间戳（优化：使用LRU缓存）
+const recentRequestContentHashes = CacheFactory.createConfigCache();
 
 // 定义白名单文件路径（保留兼容性）
 const whitelistFilePath = 'config/whitelist.json';
@@ -837,7 +943,8 @@ app.use('/freelyai', (req, res, next) => {
     const modelName = req.body && req.body.model;
     // 刷新模型白名单（异步，不阻塞）
     loadModelWhitelists().catch(()=>{});
-    if (!modelName || !freelyaiModelWhitelist.includes(modelName)) {
+    const freelyaiWhitelist = getFreelyaiModelWhitelist();
+    if (!modelName || !freelyaiWhitelist.includes(modelName)) {
       return res.status(403).json({ error: '禁止请求该模型，未在白名单内。' });
     }
   }
@@ -1500,7 +1607,8 @@ app.use('/v1', (req, res, next) => {
   if (["POST", "PUT", "PATCH"].includes(method)) {
     const modelName = req.body && req.body.model;
     loadModelWhitelists().catch(()=>{});
-    if (!modelName || !robotModelWhitelist.includes(modelName)) {
+    const robotWhitelist = getRobotModelWhitelist();
+    if (!modelName || !robotWhitelist.includes(modelName)) {
       return res.status(403).json({ error: '禁止请求该模型，未在ROBOT_WHITELIST白名单内。' });
     }
   }

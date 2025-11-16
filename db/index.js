@@ -11,9 +11,12 @@ const dbConfig = {
   password: process.env.DB_PASSWORD,  // 密码
   database: process.env.DB_NAME,      // 数据库名
   port: parseInt(process.env.DB_PORT) || 3306,  // 处理端口转换
-  waitForConnections: true,           // 连接池行为
-  connectionLimit: 10,                // 最大连接数
-  connectTimeout: 10000               // 连接超时时间（10秒）
+  waitForConnections: true,           // 连接池行为：等待可用连接
+  connectionLimit: parseInt(process.env.DB_CONN_LIMIT) || 20,  // 最大连接数（优化：10→20）
+  queueLimit: 0,                      // 排队限制：0表示无限制
+  connectTimeout: 10000,              // 连接超时时间（10秒）
+  enableKeepAlive: true,              // 启用TCP保活
+  keepAliveInitialDelay: 0            // 保活初始延迟（毫秒）
 };
 
 // 打印环境变量配置用于调试
