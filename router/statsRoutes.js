@@ -3172,5 +3172,456 @@ router.get('/logs/middleware', async (req, res) => {
   }
 });
 
+// ==================== 数据大屏专用统计API ====================
+
+// 🆕 模型使用分布统计
+router.get('/stats/models', async (req, res) => {
+  try {
+    const { start, end } = req.query;
+    let timeFilter = '';
+    if (start && end) {
+      timeFilter = `AND timestamp BETWEEN '${start}' AND '${end}'`;
+    } else {
+      // 默认最近7天
+      timeFilter = `AND timestamp >= DATE_SUB(NOW(), INTERVAL 7 DAY)`;
+    }
+
+    const query = `
+      SELECT model, COUNT(*) as count
+      FROM requests
+      WHERE 1=1 ${timeFilter}
+      GROUP BY model
+      ORDER BY count DESC
+      LIMIT 10
+    `;
+
+    const [rows] = await pool.query(query);
+    res.json({
+      success: true,
+      data: rows.map(row => ({
+        name: row.model,
+        value: row.count
+      }))
+    });
+  } catch (error) {
+    console.error('获取模型分布失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+// 🆕 请求时间线趋势（最近24小时，按小时聚合）
+router.get('/stats/timeline', async (req, res) => {
+  try {
+    const { hours = 24 } = req.query;
+
+    const query = `
+      SELECT
+        DATE_FORMAT(timestamp, '%Y-%m-%d %H:00:00') as hour,
+        COUNT(*) as count
+      FROM requests
+      WHERE timestamp >= DATE_SUB(NOW(), INTERVAL ${parseInt(hours)} HOUR)
+      GROUP BY hour
+      ORDER BY hour ASC
+    `;
+
+    const [rows] = await pool.query(query);
+
+    // 填充空缺的小时（确保连续）
+    const result = [];
+    const now = new Date();
+    for (let i = parseInt(hours) - 1; i >= 0; i--) {
+      const time = new Date(now.getTime() - i * 60 * 60 * 1000);
+      const hourStr = time.toISOString().slice(0, 13) + ':00:00';
+      const found = rows.find(r => new Date(r.hour).toISOString().slice(0, 13) === time.toISOString().slice(0, 13));
+      result.push({
+        time: `${time.getHours()}:00`,
+        timestamp: hourStr,
+        count: found ? found.count : 0
+      });
+    }
+
+    res.json({
+      success: true,
+      data: result
+    });
+  } catch (error) {
+    console.error('获取时间线趋势失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+// 🆕 路由调用统计
+router.get('/stats/routes', async (req, res) => {
+  try {
+    const { start, end } = req.query;
+    let timeFilter = '';
+    if (start && end) {
+      timeFilter = `AND timestamp BETWEEN '${start}' AND '${end}'`;
+    } else {
+      // 默认最近7天
+      timeFilter = `AND timestamp >= DATE_SUB(NOW(), INTERVAL 7 DAY)`;
+    }
+
+    const query = `
+      SELECT route, COUNT(*) as count
+      FROM requests
+      WHERE 1=1 ${timeFilter}
+      GROUP BY route
+      ORDER BY count DESC
+    `;
+
+    const [rows] = await pool.query(query);
+    res.json({
+      success: true,
+      data: rows.map(row => ({
+        name: row.route,
+        value: row.count
+      }))
+    });
+  } catch (error) {
+    console.error('获取路由统计失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+// 🆕 24小时请求分布统计（按小时段）
+router.get('/stats/hourly', async (req, res) => {
+  try {
+    const { days = 7 } = req.query;
+
+    const query = `
+      SELECT
+        HOUR(timestamp) as hour,
+        COUNT(*) as count
+      FROM requests
+      WHERE timestamp >= DATE_SUB(NOW(), INTERVAL ${parseInt(days)} DAY)
+      GROUP BY hour
+      ORDER BY hour ASC
+    `;
+
+    const [rows] = await pool.query(query);
+
+    // 确保所有24小时都有数据
+    const hourlyData = Array(24).fill(0).map((_, i) => {
+      const found = rows.find(r => r.hour === i);
+      return {
+        hour: `${i}:00`,
+        count: found ? found.count : 0
+      };
+    });
+
+    res.json({
+      success: true,
+      data: hourlyData
+    });
+  } catch (error) {
+    console.error('获取小时分布失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+// 🆕 系统健康状态
+router.get('/stats/health', async (req, res) => {
+  try {
+    // 检查数据库连接
+    const [dbCheck] = await pool.query('SELECT 1 as alive');
+    const dbHealth = dbCheck.length > 0 ? 100 : 0;
+
+    // 检查最近1分钟的请求数（作为服务活跃度指标）
+    const [recentRequests] = await pool.query(`
+      SELECT COUNT(*) as count
+      FROM requests
+      WHERE timestamp >= DATE_SUB(NOW(), INTERVAL 1 MINUTE)
+    `);
+
+    // 计算服务健康度（简化算法：有请求就是健康的）
+    const serviceHealth = recentRequests[0].count > 0 ? 98 : 85;
+
+    // 获取最近错误率（如果有moderation_logs表的话）
+    let errorRate = 5; // 默认5%错误率
+    try {
+      const [moderationCheck] = await pool.query(`
+        SELECT
+          SUM(CASE WHEN risk_level = 'REJECT' THEN 1 ELSE 0 END) as rejects,
+          COUNT(*) as total
+        FROM moderation_logs
+        WHERE processed_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR)
+      `);
+      if (moderationCheck[0].total > 0) {
+        errorRate = Math.min((moderationCheck[0].rejects / moderationCheck[0].total) * 100, 20);
+      }
+    } catch (e) {
+      // 如果没有moderation_logs表，忽略
+    }
+
+    const apiHealth = Math.max(70, 100 - errorRate * 2);
+
+    res.json({
+      success: true,
+      data: [
+        { name: '主服务', value: serviceHealth },
+        { name: '统计服务', value: 95 }, // statsServer自身肯定在运行
+        { name: '数据库', value: dbHealth },
+        { name: 'API响应', value: Math.round(apiHealth) }
+      ]
+    });
+  } catch (error) {
+    console.error('获取健康状态失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+// 🆕 趋势对比数据（今天vs昨天）
+router.get('/stats/trends', async (req, res) => {
+  try {
+    // 获取今天的统计
+    const [todayStats] = await pool.query(`
+      SELECT
+        COUNT(*) as requests,
+        COUNT(DISTINCT IFNULL(conversation_id, id)) as conversations,
+        COUNT(DISTINCT user_id) as users
+      FROM requests
+      WHERE DATE(timestamp) = CURDATE()
+    `);
+
+    // 获取昨天的统计
+    const [yesterdayStats] = await pool.query(`
+      SELECT
+        COUNT(*) as requests,
+        COUNT(DISTINCT IFNULL(conversation_id, id)) as conversations,
+        COUNT(DISTINCT user_id) as users
+      FROM requests
+      WHERE DATE(timestamp) = DATE_SUB(CURDATE(), INTERVAL 1 DAY)
+    `);
+
+    // 获取今天的违规数
+    let todayViolations = 0;
+    let yesterdayViolations = 0;
+    try {
+      const [todayMod] = await pool.query(`
+        SELECT COUNT(*) as count
+        FROM moderation_logs
+        WHERE DATE(processed_at) = CURDATE()
+        AND risk_level IN ('REVIEW', 'REJECT')
+      `);
+      const [yesterdayMod] = await pool.query(`
+        SELECT COUNT(*) as count
+        FROM moderation_logs
+        WHERE DATE(processed_at) = DATE_SUB(CURDATE(), INTERVAL 1 DAY)
+        AND risk_level IN ('REVIEW', 'REJECT')
+      `);
+      todayViolations = todayMod[0].count;
+      yesterdayViolations = yesterdayMod[0].count;
+    } catch (e) {
+      // 没有moderation_logs表时跳过
+    }
+
+    // 计算趋势百分比
+    const calculateTrend = (today, yesterday) => {
+      if (yesterday === 0) return today > 0 ? 100 : 0;
+      return parseFloat((((today - yesterday) / yesterday) * 100).toFixed(1));
+    };
+
+    res.json({
+      success: true,
+      data: {
+        requestsTrend: calculateTrend(todayStats[0].requests, yesterdayStats[0].requests),
+        conversationsTrend: calculateTrend(todayStats[0].conversations, yesterdayStats[0].conversations),
+        usersTrend: calculateTrend(todayStats[0].users, yesterdayStats[0].users),
+        violationsTrend: calculateTrend(todayViolations, yesterdayViolations)
+      }
+    });
+  } catch (error) {
+    console.error('获取趋势数据失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+// 🆕 系统信息统计
+router.get('/stats/system-info', async (req, res) => {
+  try {
+    // 计算系统运行时间（基于最早的请求记录）
+    const [firstRequest] = await pool.query(`
+      SELECT MIN(timestamp) as first_time
+      FROM requests
+    `);
+
+    let uptime = '未知';
+    if (firstRequest[0].first_time) {
+      const start = new Date(firstRequest[0].first_time);
+      const now = new Date();
+      const diff = now - start;
+      const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+      const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+      uptime = `${days}天${hours}小时`;
+    }
+
+    // 获取今日统计
+    const [todayStats] = await pool.query(`
+      SELECT
+        COUNT(*) as requests,
+        COUNT(DISTINCT user_id) as users,
+        COUNT(DISTINCT ip) as ips
+      FROM requests
+      WHERE DATE(timestamp) = CURDATE()
+    `);
+
+    res.json({
+      success: true,
+      data: {
+        uptime,
+        lastUpdate: new Date().toLocaleString('zh-CN'),
+        todayRequests: todayStats[0].requests,
+        todayUsers: todayStats[0].users,
+        todayIps: todayStats[0].ips,
+        serverTime: new Date().toISOString()
+      }
+    });
+  } catch (error) {
+    console.error('获取系统信息失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+// 🆕 API性能指标（基于请求统计推算）
+router.get('/stats/api-performance', async (req, res) => {
+  try {
+    // 1. 响应速度 - 基于最近1小时的请求频率
+    const [recentActivity] = await pool.query(`
+      SELECT COUNT(*) as count
+      FROM requests
+      WHERE timestamp >= DATE_SUB(NOW(), INTERVAL 1 HOUR)
+    `);
+    const requestsPerHour = recentActivity[0].count;
+    // 假设系统容量是每小时1000次，计算响应速度得分
+    const speedScore = Math.min(100, Math.max(50, 100 - (requestsPerHour / 10)));
+
+    // 2. 成功率 - 基于审核拦截率
+    let successRate = 98; // 默认98%
+    try {
+      const [moderationStats] = await pool.query(`
+        SELECT
+          SUM(CASE WHEN risk_level = 'REJECT' THEN 1 ELSE 0 END) as rejects,
+          COUNT(*) as total
+        FROM moderation_logs
+        WHERE processed_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
+      `);
+      if (moderationStats[0].total > 0) {
+        successRate = Math.max(85, 100 - (moderationStats[0].rejects / moderationStats[0].total) * 100);
+      }
+    } catch (e) {
+      // 没有moderation_logs表时使用默认值
+    }
+
+    // 3. 并发能力 - 基于最近活跃用户数
+    const [concurrentUsers] = await pool.query(`
+      SELECT COUNT(DISTINCT user_id) as count
+      FROM requests
+      WHERE timestamp >= DATE_SUB(NOW(), INTERVAL 5 MINUTE)
+    `);
+    const concurrentScore = Math.min(100, 60 + concurrentUsers[0].count * 2);
+
+    // 4. 稳定性 - 基于请求分布的方差（越均匀越稳定）
+    const [hourlyDist] = await pool.query(`
+      SELECT HOUR(timestamp) as hour, COUNT(*) as count
+      FROM requests
+      WHERE timestamp >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
+      GROUP BY hour
+    `);
+    const counts = hourlyDist.map(h => h.count);
+    const avg = counts.reduce((a, b) => a + b, 0) / (counts.length || 1);
+    const variance = counts.reduce((sum, c) => sum + Math.pow(c - avg, 2), 0) / (counts.length || 1);
+    const stdDev = Math.sqrt(variance);
+    const stabilityScore = Math.max(70, 100 - (stdDev / avg) * 50);
+
+    // 5. 可用性 - 基于最近请求的时间连续性
+    const [lastRequest] = await pool.query(`
+      SELECT TIMESTAMPDIFF(MINUTE, MAX(timestamp), NOW()) as minutes_ago
+      FROM requests
+    `);
+    const minutesAgo = lastRequest[0].minutes_ago || 0;
+    const availabilityScore = minutesAgo < 1 ? 98 : Math.max(70, 100 - minutesAgo * 5);
+
+    // 6. 安全性 - 基于黑名单和违规记录
+    let securityScore = 95;
+    try {
+      const [flags] = await pool.query(`
+        SELECT COUNT(*) as banned_count
+        FROM user_ip_flags
+        WHERE is_banned = 1
+      `);
+      securityScore = Math.max(70, 100 - flags[0].banned_count);
+    } catch (e) {
+      // 没有表时使用默认值
+    }
+
+    res.json({
+      success: true,
+      data: {
+        speedScore: Math.round(speedScore),
+        successRate: Math.round(successRate),
+        concurrentScore: Math.round(concurrentScore),
+        stabilityScore: Math.round(stabilityScore),
+        availabilityScore: Math.round(availabilityScore),
+        securityScore: Math.round(securityScore)
+      }
+    });
+  } catch (error) {
+    console.error('获取API性能指标失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+// 🆕 系统负载统计（基于请求压力推算）
+router.get('/stats/system-load', async (req, res) => {
+  try {
+    // 计算最近1分钟、5分钟、15分钟的请求数
+    const [load1m] = await pool.query(`
+      SELECT COUNT(*) as count
+      FROM requests
+      WHERE timestamp >= DATE_SUB(NOW(), INTERVAL 1 MINUTE)
+    `);
+
+    const [load5m] = await pool.query(`
+      SELECT COUNT(*) as count
+      FROM requests
+      WHERE timestamp >= DATE_SUB(NOW(), INTERVAL 5 MINUTE)
+    `);
+
+    const [load15m] = await pool.query(`
+      SELECT COUNT(*) as count
+      FROM requests
+      WHERE timestamp >= DATE_SUB(NOW(), INTERVAL 15 MINUTE)
+    `);
+
+    // 假设系统容量：每分钟100次请求为满载
+    const capacity = 100;
+    const load1mPercent = Math.min(100, (load1m[0].count / capacity) * 100);
+    const load5mPercent = Math.min(100, (load5m[0].count / (capacity * 5)) * 100);
+    const load15mPercent = Math.min(100, (load15m[0].count / (capacity * 15)) * 100);
+
+    // 综合负载（加权平均，最近的权重更高）
+    const overallLoad = Math.round(
+      load1mPercent * 0.5 + load5mPercent * 0.3 + load15mPercent * 0.2
+    );
+
+    res.json({
+      success: true,
+      data: {
+        load: overallLoad,
+        load1m: Math.round(load1mPercent),
+        load5m: Math.round(load5mPercent),
+        load15m: Math.round(load15mPercent),
+        requestCount1m: load1m[0].count,
+        requestCount5m: load5m[0].count,
+        requestCount15m: load15m[0].count
+      }
+    });
+  } catch (error) {
+    console.error('获取系统负载失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
 
 module.exports = router;
