@@ -316,6 +316,100 @@ function parseAIResponse(data, route) {
 }
 
 /**
+ * 从原始响应数据中提取 token 用量
+ * 兼容 OpenAI 非流式、OpenAI 流式（最后 chunk 含 usage）、Gemini usageMetadata
+ */
+function extractTokenUsage(data) {
+  // 1. 非流式 JSON
+  try {
+    const parsed = JSON.parse(data);
+    if (parsed.usage) {
+      return {
+        prompt_tokens:     parsed.usage.prompt_tokens     ?? parsed.usage.input_tokens  ?? null,
+        completion_tokens: parsed.usage.completion_tokens ?? parsed.usage.output_tokens ?? null,
+        total_tokens:      parsed.usage.total_tokens      ?? null
+      };
+    }
+    if (parsed.usageMetadata) {
+      const m = parsed.usageMetadata;
+      return {
+        prompt_tokens:     m.promptTokenCount     ?? null,
+        completion_tokens: m.candidatesTokenCount ?? null,
+        total_tokens:      m.totalTokenCount      ?? null
+      };
+    }
+  } catch {}
+
+  // 2. 流式 SSE — 从末尾往前找含 usage 的 chunk
+  if (data.includes('data: ')) {
+    const lines = data.split('\n');
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i].trim();
+      if (!line.startsWith('data: ') || line.includes('[DONE]')) continue;
+      try {
+        const chunk = JSON.parse(line.substring(6));
+        if (chunk.usage) {
+          return {
+            prompt_tokens:     chunk.usage.prompt_tokens     ?? chunk.usage.input_tokens  ?? null,
+            completion_tokens: chunk.usage.completion_tokens ?? chunk.usage.output_tokens ?? null,
+            total_tokens:      chunk.usage.total_tokens      ?? null
+          };
+        }
+        if (chunk.usageMetadata) {
+          const m = chunk.usageMetadata;
+          return {
+            prompt_tokens:     m.promptTokenCount     ?? null,
+            completion_tokens: m.candidatesTokenCount ?? null,
+            total_tokens:      m.totalTokenCount      ?? null
+          };
+        }
+      } catch {}
+    }
+  }
+
+  return null;
+}
+
+/**
+ * 异步回写 token 用量到 requests 表
+ * 延迟 1000ms，确保 logger 批量 INSERT（500ms 间隔）已提交
+ */
+function asyncUpdateTokenUsage(conversationId, requestTimestamp, usage) {
+  if (!conversationId || !usage) return;
+  const { prompt_tokens, completion_tokens, total_tokens } = usage;
+  if (prompt_tokens == null && completion_tokens == null && total_tokens == null) return;
+
+  setTimeout(async () => {
+    try {
+      // 用子查询绕过 MySQL 不支持 UPDATE + LIMIT 的限制
+      const [result] = await pool.query(
+        `UPDATE requests SET prompt_tokens = ?, completion_tokens = ?, total_tokens = ?
+         WHERE id = (
+           SELECT id FROM (
+             SELECT id FROM requests
+             WHERE conversation_id = ?
+               AND timestamp BETWEEN ? AND ?
+               AND prompt_tokens IS NULL
+             ORDER BY id DESC LIMIT 1
+           ) t
+         )`,
+        [
+          prompt_tokens, completion_tokens, total_tokens,
+          conversationId,
+          new Date(requestTimestamp - 2000),
+          new Date(requestTimestamp + 60000)
+        ]
+      );
+      if (result.affectedRows > 0) {
+        console.log(`[ResponseInterceptor] ✓ token 回写: conv=${conversationId} prompt=${prompt_tokens} comp=${completion_tokens} total=${total_tokens}`);
+      }
+    } catch (err) {
+      console.error('[ResponseInterceptor] token 回写失败:', err.message);
+    }
+  }, 1000);
+}
+
+/**
  * 更新数据库中的对话记录，添加AI回答 (v1.10.0优化: 使用 conversation_id 直接定位)
  */
 async function updateConversationWithResponse(requestKey, aiResponse) {
@@ -544,13 +638,17 @@ module.exports = function responseInterceptorMiddleware(req, res, next) {
             ? `${(aiResponse.items || []).length}张图`
             : '结构化数据';
         console.log(`[ResponseInterceptor] 🤖 解析AI响应: key=${requestKey}, ${responseSummary}`);
-        // 异步更新数据库，不阻塞响应
+        // 异步更新对话记录，不阻塞响应
         setImmediate(() => {
           updateConversationWithResponse(requestKey, aiResponse);
         });
       } else {
         console.log(`[ResponseInterceptor] ⚠️  无法解析AI响应: key=${requestKey}, route=${route}, status=${res.statusCode}`);
       }
+
+      // 异步回写 token 用量（延迟 1s 确保 logger INSERT 已提交）
+      const tokenUsage = extractTokenUsage(responseData);
+      asyncUpdateTokenUsage(conversationId, cacheData.timestamp, tokenUsage);
     } else {
       console.log(`[ResponseInterceptor] ❌ 请求失败: key=${requestKey}, status=${res.statusCode}`);
       // 请求失败时清理缓存

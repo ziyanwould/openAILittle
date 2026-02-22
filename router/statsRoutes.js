@@ -16,6 +16,14 @@ const { getModelWhitelists, setModelWhitelist, resetModelWhitelists } = require(
 const logCollector = require('../lib/logCollector');
 const { getMinioClient } = require('../lib/minioClient');
 
+// 工具函数：配置变更后主动通知主服务刷新缓存（最佳努力，不影响主流程）
+async function refreshConfigCache() {
+  const mainPort = process.env.MAIN_PORT || 20491;
+  try {
+    await fetch(`http://localhost:${mainPort}/internal/cache/refresh-config`).catch(() => {});
+  } catch (_) {}
+}
+
 let cachedMinioClient = null;
 const SIGNED_URL_TTL = parseInt(process.env.MINIO_SIGNED_URL_TTL || '3600', 10);
 
@@ -1662,6 +1670,7 @@ router.post('/config/rules', async (req, res) => {
       priority: parseInt(priority)
     });
     
+    await refreshConfigCache();
     res.status(201).json({
       message: '配置规则添加成功',
       id: result.insertId
@@ -1705,7 +1714,7 @@ router.put('/config/rules/:id', async (req, res) => {
     }
     
     await updateConfigRule(id, updateFields);
-    
+    await refreshConfigCache();
     res.json({ message: '配置规则更新成功' });
   } catch (error) {
     console.error('更新配置规则失败:', error);
@@ -1734,7 +1743,7 @@ router.delete('/config/rules/:id', async (req, res) => {
     }
     
     await deleteConfigRule(id);
-    
+    await refreshConfigCache();
     res.json({ message: '配置规则删除成功' });
   } catch (error) {
     console.error('删除配置规则失败:', error);
@@ -1799,6 +1808,7 @@ router.get('/config/rule-types', async (req, res) => {
 router.post('/config/sync-files', async (req, res) => {
   try {
     await syncFileConfigToDatabase();
+    await refreshConfigCache();
     res.json({ message: '文件配置同步到数据库成功' });
   } catch (error) {
     console.error('同步文件配置失败:', error);
@@ -1872,6 +1882,7 @@ router.post('/stats/system-configs', async (req, res) => {
     });
     
     if (result) {
+      await refreshConfigCache();
       res.json({ message: '系统配置添加成功', id: result });
     } else {
       res.status(500).json({ error: '系统配置添加失败' });
@@ -1903,8 +1914,9 @@ router.put('/stats/system-configs/:id', async (req, res) => {
     }
     
     const result = await updateSystemConfig(parseInt(id), updateData);
-    
+
     if (result) {
+      await refreshConfigCache();
       res.json({ message: '系统配置更新成功' });
     } else {
       res.status(404).json({ error: '系统配置不存在' });
@@ -1920,8 +1932,9 @@ router.delete('/stats/system-configs/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const result = await deleteSystemConfig(parseInt(id));
-    
+
     if (result) {
+      await refreshConfigCache();
       res.json({ message: '系统配置删除成功' });
     } else {
       res.status(404).json({ error: '系统配置不存在' });
@@ -3246,6 +3259,54 @@ router.get('/stats/timeline', async (req, res) => {
     });
   } catch (error) {
     console.error('获取时间线趋势失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+// 🆕 Token 使用趋势（按天聚合，含估算费用）
+router.get('/stats/token-trend', async (req, res) => {
+  try {
+    const { days = 14 } = req.query;
+    const n = Math.min(Math.max(parseInt(days) || 14, 1), 90);
+
+    const [rows] = await pool.query(
+      `SELECT
+         DATE(timestamp)            AS date,
+         SUM(prompt_tokens)         AS prompt_tokens,
+         SUM(completion_tokens)     AS completion_tokens,
+         SUM(total_tokens)          AS total_tokens,
+         COUNT(*)                   AS call_count
+       FROM requests
+       WHERE timestamp >= DATE_SUB(NOW(), INTERVAL ? DAY)
+         AND total_tokens IS NOT NULL
+       GROUP BY DATE(timestamp)
+       ORDER BY date ASC`,
+      [n]
+    );
+
+    // 补全缺失日期
+    const result = [];
+    const now = new Date();
+    for (let i = n - 1; i >= 0; i--) {
+      const d = new Date(now);
+      d.setDate(d.getDate() - i);
+      const dateStr = d.toISOString().slice(0, 10);
+      const found = rows.find(r => {
+        const rowDate = r.date instanceof Date ? r.date.toISOString().slice(0, 10) : String(r.date).slice(0, 10);
+        return rowDate === dateStr;
+      });
+      result.push({
+        date: dateStr,
+        prompt_tokens:     found ? Number(found.prompt_tokens     || 0) : 0,
+        completion_tokens: found ? Number(found.completion_tokens || 0) : 0,
+        total_tokens:      found ? Number(found.total_tokens      || 0) : 0,
+        call_count:        found ? Number(found.call_count        || 0) : 0,
+      });
+    }
+
+    res.json({ success: true, data: result });
+  } catch (error) {
+    console.error('获取token趋势失败:', error);
     res.status(500).json({ error: '服务器内部错误' });
   }
 });
