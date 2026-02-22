@@ -130,6 +130,48 @@
 
 ---
 
+## ✅ 第六优先级 — Token 追踪 & 用户行为限流（2026-02-22）
+
+### 6.1 requests 表新增 token 字段
+- **内容**: `ALTER TABLE requests ADD COLUMN prompt_tokens INT, completion_tokens INT, total_tokens INT`
+- **状态**: ✅ 已完成
+
+### 6.2 requests 表新增索引
+- **内容**: `CREATE INDEX idx_user_timestamp ON requests (user_id, timestamp)`
+- **状态**: ✅ 已完成
+
+### 6.3 Token 异步追踪
+- **文件**: `middleware/responseInterceptorMiddleware.js`
+- **内容**: 新增 `extractTokenUsage()`（兼容 OpenAI 非流式/流式及 Gemini usageMetadata）和 `asyncUpdateTokenUsage()`（延迟 1s 异步回写），不阻塞响应
+- **状态**: ✅ 已完成
+
+### 6.4 流式请求注入 stream_options
+- **文件**: `index.js`
+- **内容**: 新增 `injectStreamOptions` 中间件，对 stream:true 的请求自动注入 `stream_options:{include_usage:true}`，覆盖 `/v1/` `/chatnio/` `/freelyai/` `/freeopenai/` `/cloudflare/` `/siliconflow/` 6条路由
+- **状态**: ✅ 已完成
+
+### 6.5 用户行为限流中间件
+- **文件**: `middleware/userBehaviorLimitMiddleware.js`
+- **内容**: 按用户维度限制4小时/周的调用次数与token用量，三层缓存（配置60s、白名单60s、用户计数10s），fail-open 设计
+- **阈值**: 4小时150次/200万token，每周1500次/8000万token（对应每人约30元/天上限）
+- **状态**: ✅ 已完成（阈值经实际数据分析后从50次调整为150次）
+
+### 6.6 system_configs 扩展 USER_BEHAVIOR_LIMIT 类型
+- **内容**: ALTER TABLE MODIFY COLUMN ENUM 扩展，插入默认配置，/internal/cache/refresh-config 接入 clearCache()
+- **状态**: ✅ 已完成
+
+### 6.7 数据大屏 Token 使用趋势图
+- **文件**: `router/statsRoutes.js` + `openailittle-frontend/src/views/Dashboard.vue`
+- **内容**: 新增 `/stats/token-trend` 接口（按天聚合 prompt/completion/total_tokens），Dashboard 新增全宽堆叠柱+折线双轴图，tooltip 展示估算费用（¥2.12/M）
+- **状态**: ✅ 已完成
+
+### 6.8 前端 SystemConfigManagement 支持 USER_BEHAVIOR_LIMIT
+- **文件**: `openailittle-frontend/src/views/SystemConfigManagement.vue`
+- **内容**: 筛选/表单下拉新增类型，configTypeGuides 新增模板，getConfigTypeName/Color 补全映射
+- **状态**: ✅ 已完成
+
+---
+
 ## ⏸ 暂缓 — 全面重构为功能导向多子页面
 
 - 成本大，当前配置使用频率不高，暂不实施
