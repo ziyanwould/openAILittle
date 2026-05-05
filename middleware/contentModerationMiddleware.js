@@ -747,7 +747,20 @@ class ContentModerationMiddleware {
           }
         }
 
-        if (!shouldModerateResult) {
+        let effectiveModerate = shouldModerateResult;
+
+        if (!effectiveModerate) {
+          const isAnonymous = !userId || userId === 'anonymous';
+          if (isAnonymous) {
+            const forceAnonymous = await databaseModerationConfig.getAnonymousForceEnabled();
+            if (forceAnonymous && globalConfig.global.enabled) {
+              effectiveModerate = true;
+              console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] Anonymous user forced moderation override applied`);
+            }
+          }
+        }
+
+        if (!effectiveModerate) {
           console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] Skipping moderation - not configured for this route/model`);
           return next();
         }

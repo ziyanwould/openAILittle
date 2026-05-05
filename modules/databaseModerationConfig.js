@@ -40,6 +40,7 @@ class DatabaseModerationConfig {
 
         return {
           enabled: configValue.enabled !== false,
+          force_anonymous_moderation: configValue.force_anonymous_moderation !== false,
           apiEndpoint: configValue.apiEndpoint || moderationConfig.global.apiEndpoint,
           timeout: configValue.timeout || moderationConfig.global.timeout
         };
@@ -168,6 +169,14 @@ class DatabaseModerationConfig {
   async reloadConfig() {
     this.clearCache();
     await this.updateCache();
+  }
+
+  /**
+   * 获取是否强制对匿名用户开启审核
+   */
+  async getAnonymousForceEnabled() {
+    const globalConfig = await this.getGlobalConfig();
+    return globalConfig.force_anonymous_moderation !== false;
   }
 }
 

@@ -2164,6 +2164,67 @@ router.post('/stats/autoban-config/reset', async (req, res) => {
   }
 });
 
+// ==================== 匿名用户强制审核配置 API ====================
+
+// 获取匿名用户强制审核配置
+router.get('/stats/anonymous-moderation-config', async (req, res) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT config_value FROM system_configs
+      WHERE config_type = 'MODERATION' AND config_key = 'global' AND is_active = 1
+      LIMIT 1
+    `);
+    let forceAnonymous = true;
+    if (rows.length > 0) {
+      const cfg = typeof rows[0].config_value === 'string'
+        ? JSON.parse(rows[0].config_value)
+        : rows[0].config_value;
+      if (cfg.force_anonymous_moderation !== undefined) {
+        forceAnonymous = cfg.force_anonymous_moderation;
+      }
+    }
+    res.json({ data: { force_anonymous_moderation: forceAnonymous }, message: '获取成功' });
+  } catch (error) {
+    console.error('获取匿名审核配置失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+// 更新匿名用户强制审核配置
+router.put('/stats/anonymous-moderation-config', async (req, res) => {
+  try {
+    const { force_anonymous_moderation } = req.body;
+    if (typeof force_anonymous_moderation !== 'boolean') {
+      return res.status(400).json({ error: 'force_anonymous_moderation 必须为布尔值' });
+    }
+
+    const [rows] = await pool.query(`
+      SELECT id, config_value FROM system_configs
+      WHERE config_type = 'MODERATION' AND config_key = 'global' AND is_active = 1
+      LIMIT 1
+    `);
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: '未找到全局审核配置，请先在系统配置中初始化' });
+    }
+
+    const current = typeof rows[0].config_value === 'string'
+      ? JSON.parse(rows[0].config_value)
+      : rows[0].config_value;
+    const updated = { ...current, force_anonymous_moderation };
+
+    await pool.query(
+      `UPDATE system_configs SET config_value = ?, updated_at = NOW() WHERE id = ?`,
+      [JSON.stringify(updated), rows[0].id]
+    );
+
+    res.json({ message: '更新成功', data: { force_anonymous_moderation } });
+  } catch (error) {
+    console.error('更新匿名审核配置失败:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
 // ==================== 请求体修改配置管理 API ====================
 
 // 获取请求体修改规则
