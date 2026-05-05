@@ -46,6 +46,8 @@ const { initializeSystemConfigs, getNotificationConfigs, pool, getConciseModeCon
 const { CacheFactory } = require('./lib/cacheManager'); // 🆕 引入统一缓存管理器
 
 const chatnioRateLimiters = {}; // 用于存储 chatnio 的限流器
+let chatnioDefaultLimiters = [];  // chatnio 兜底限流器
+let chatnioDefaultEnabled = true; // 兜底开关，默认启用
 // 在文件开头引入 dotenv
 require('dotenv').config();
 
@@ -510,6 +512,7 @@ app.get('/internal/cache/refresh-config', async (_req, res) => {
     userBehaviorLimitMiddleware.clearCache();
     await loadAllConfigFromManager();
     await loadWhitelistFromConfigManager();
+    await loadChatnioDefaultLimiter();
     res.json({ success: true, message: 'config cache refreshed' });
   } catch (e) {
     res.status(500).json({ success: false });
@@ -1292,6 +1295,42 @@ function buildChatnioRateLimiters() {
 
 buildChatnioRateLimiters(); // 构建 chatnioRateLimiters 对象
 
+// 从数据库加载 chatnio 兜底限流配置
+async function loadChatnioDefaultLimiter() {
+  try {
+    const [rows] = await pool.query(
+      "SELECT config_value FROM system_configs WHERE config_type='RATE_LIMIT' AND config_key='chatnio_default' AND is_active=1 LIMIT 1"
+    );
+    if (!rows.length) return;
+    const cfg = typeof rows[0].config_value === 'string' ? JSON.parse(rows[0].config_value) : rows[0].config_value;
+    chatnioDefaultEnabled = cfg.enabled !== false;
+    chatnioDefaultLimiters = (cfg.enabled !== false && cfg.limits)
+      ? cfg.limits.map(({ windowMs, max }) => rateLimit({
+          windowMs, max,
+          keyGenerator: (req) => {
+            const uid = req.body.user || req.headers['x-user-id'] || 'anonymous';
+            const ip  = req.body.user_ip || req.headers['x-user-ip'] || req.ip;
+            return `chatnio-default-${uid}-${ip}`;
+          },
+          handler: (req, res) => {
+            const d = moment.duration(windowMs);
+            const fmt = [
+              d.days() > 0 ? `${d.days()}天` : '',
+              d.hours() > 0 ? `${d.hours()}小时` : '',
+              d.minutes() > 0 ? `${d.minutes()}分钟` : ''
+            ].filter(Boolean).join(' ');
+            console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [ChatNio Default Limit] ${req.ip} 触发兜底限流: ${max}次/${fmt}`);
+            return res.status(429).json({ error: { message: `请求过于频繁（兜底限制），请在 ${fmt} 后重试。`, type: 'rate_limit_exceeded', code: '4296' } });
+          }
+        }))
+      : [];
+    console.log(`[ChatNio Default Limiter] 已加载，enabled=${chatnioDefaultEnabled}，limiters=${chatnioDefaultLimiters.length}`);
+  } catch (e) {
+    console.error('[ChatNio Default Limiter] 加载失败:', e.message);
+  }
+}
+loadChatnioDefaultLimiter();
+
 app.use(restrictGeminiModelAccess); // 应用 restrictGeminiModelAccess 中间件
 
 app.use(loggingMiddleware);  // <-- 中间件已优化为异步无阻塞
@@ -1479,8 +1518,20 @@ app.use('/chatnio', (req, res, next) => {
           }
       })();
   } else {
-        console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [ChatNio] 对 ${modelName} 模型的请求没有匹配的限流规则。`);
-      next(); // 没有适用的 chatnio 限流器
+    if (chatnioDefaultEnabled && chatnioDefaultLimiters.length > 0) {
+      console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [ChatNio] 模型 ${modelName} 无专属规则，应用兜底限流`);
+      (async () => {
+        try {
+          await Promise.all(chatnioDefaultLimiters.map(limiter =>
+            new Promise((resolve, reject) => { limiter(req, res, err => err ? reject(err) : resolve()); })
+          ));
+          next();
+        } catch (_) {}
+      })();
+    } else {
+      console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [ChatNio] 对 ${modelName} 模型的请求没有匹配的限流规则。`);
+      next();
+    }
   }
 }, injectStreamOptions, contentModerationMiddleware, chatnioProxy);
 
