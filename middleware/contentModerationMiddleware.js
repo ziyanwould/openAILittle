@@ -760,6 +760,11 @@ class ContentModerationMiddleware {
           }
         }
 
+        if (!effectiveModerate && req._forceChatnioModeration) {
+          effectiveModerate = true;
+          console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] User ${userId} exceeded daily chatnio threshold, forcing moderation`);
+        }
+
         if (!effectiveModerate) {
           console.log(`${moment().format('YYYY-MM-DD HH:mm:ss')} [Content Moderation] Skipping moderation - not configured for this route/model`);
           return next();

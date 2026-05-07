@@ -53,13 +53,16 @@ let chatnioAnonEnabled = true;    // 匿名独立限速开关
 
 // 全局 IP 每日计数（防多账号绕限）
 const ipDailyRequestCounts = {};
+// chatnio 路由用户今日请求计数（高频自动审核用）
+const userChatnioDailyCounts = {};
 // 重复内容检测缓存：key=`${userId}-${ip}-${hash}`，value={count,firstSeen}
 const recentContentCache = new Map();
-// 每天零点重置 IP 日计数
+// 每天零点重置 IP 日计数及用户日计数
 setInterval(() => {
   const keys = Object.keys(ipDailyRequestCounts);
   const today = moment().format('YYYY-MM-DD');
   keys.forEach(k => { if (!k.startsWith(today)) delete ipDailyRequestCounts[k]; });
+  Object.keys(userChatnioDailyCounts).forEach(k => { if (!k.startsWith(today)) delete userChatnioDailyCounts[k]; });
 }, 60 * 60 * 1000); // 每小时检查一次
 // 每5分钟清理过期的重复内容缓存
 setInterval(() => {
@@ -1440,10 +1443,13 @@ const DUPLICATE_MAX_COUNT = 3;
 function duplicateContentDetectionMiddleware(req, res, next) {
   const messages = req.body && req.body.messages;
   if (!messages || !messages.length) return next();
-  const contentStr = JSON.stringify(messages.map(m => ({
-    role: m.role,
-    content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
-  })));
+  // 只取最后一条用户消息内容作为哈希基准，避免对话历史差异绕过检测
+  const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
+  if (!lastUserMsg) return next();
+  const lastContent = typeof lastUserMsg.content === 'string'
+    ? lastUserMsg.content
+    : JSON.stringify(lastUserMsg.content);
+  const contentStr = lastContent.trim();
   const hash = crypto.createHash('md5').update(contentStr).digest('hex');
   const userId = req.body.user || req.headers['x-user-id'] || 'anonymous';
   const ip = req.body.user_ip || req.headers['x-user-ip'] || req.ip || 'unknown';
@@ -1458,6 +1464,20 @@ function duplicateContentDetectionMiddleware(req, res, next) {
     }
   } else {
     recentContentCache.set(key, { count: 1, firstSeen: now });
+  }
+  next();
+}
+
+// ---- chatnio 高频用户自动审核中间件（今日请求超过阈值后强制审核）----
+const CHATNIO_DAILY_MODERATION_THRESHOLD = 10;
+
+function chatnioHighFreqModerationMiddleware(req, res, next) {
+  const userId = req.body.user || req.headers['x-user-id'] || 'anonymous';
+  const dateKey = moment().format('YYYY-MM-DD');
+  const key = `${dateKey}:${userId}`;
+  userChatnioDailyCounts[key] = (userChatnioDailyCounts[key] || 0) + 1;
+  if (userChatnioDailyCounts[key] > CHATNIO_DAILY_MODERATION_THRESHOLD) {
+    req._forceChatnioModeration = true;
   }
   next();
 }
@@ -1668,7 +1688,7 @@ app.use('/chatnio', (req, res, next) => {
       next();
     }
   }
-}, globalIpDailyLimitMiddleware, maxTokensCapMiddleware, duplicateContentDetectionMiddleware, injectStreamOptions, contentModerationMiddleware, chatnioProxy);
+}, globalIpDailyLimitMiddleware, maxTokensCapMiddleware, duplicateContentDetectionMiddleware, chatnioHighFreqModerationMiddleware, injectStreamOptions, contentModerationMiddleware, chatnioProxy);
 
 // 限制请求体长度
 app.use('/', defaultLengthLimiter);
