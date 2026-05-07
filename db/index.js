@@ -124,7 +124,7 @@ async function initializeDatabase() {
         ip VARCHAR(45) NOT NULL,
         content TEXT NOT NULL,
         content_hash VARCHAR(64),
-        risk_level ENUM('PASS', 'REVIEW', 'REJECT') NOT NULL,
+        risk_level VARCHAR(20) NOT NULL DEFAULT 'PASS',
         risk_details JSON,
         route VARCHAR(50),
         model VARCHAR(50),
@@ -441,6 +441,14 @@ async function initializeDatabase() {
     } catch (enumError) {
       console.error('⚠️ system_configs.config_type ENUM 更新失败:', enumError.message);
       // 不抛出错误，允许系统继续运行（新安装的数据库会有正确的ENUM值）
+    }
+
+    // 将 moderation_logs.risk_level 从 ENUM 扩展为 VARCHAR(20)，兼容非标准风险等级值
+    try {
+      await connection.query(`ALTER TABLE moderation_logs MODIFY COLUMN risk_level VARCHAR(20) NOT NULL DEFAULT 'PASS'`);
+      console.log('✓ moderation_logs.risk_level 字段已扩展为 VARCHAR(20)');
+    } catch (e) {
+      if (!e.message.includes('already')) console.log('⭕ moderation_logs.risk_level 字段无需变更');
     }
 
     // ==================== 创建索引 ====================

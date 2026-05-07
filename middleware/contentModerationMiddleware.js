@@ -454,7 +454,7 @@ class ContentModerationMiddleware {
               content: content
             }
           ],
-          user_id: userId || undefined
+          user_id: (userId && userId.length >= 6) ? userId : undefined
         }),
         signal: this.getTimeoutSignal(this.sentinelTimeoutMs)
       });
