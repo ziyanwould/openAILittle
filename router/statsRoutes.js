@@ -409,7 +409,11 @@ router.get('/request/:id/conversation-logs', async (req, res) => {
         if (typeof request.content === 'string') {
           const trimmed = request.content.trim();
           if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-            parsedContent = JSON.parse(trimmed);
+            try {
+              parsedContent = JSON.parse(trimmed);
+            } catch {
+              currentRequestMessages = [{ role: 'user', content: trimmed }];
+            }
           } else if (trimmed) {
             currentRequestMessages = [{ role: 'user', content: trimmed }];
           }
