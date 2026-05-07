@@ -535,6 +535,7 @@ app.get('/internal/cache/refresh-config', async (_req, res) => {
     await loadWhitelistFromConfigManager();
     await loadChatnioDefaultLimiter();
     await loadChatnioAnonLimiter();
+    await loadChatnioHighFreqConfig();
     res.json({ success: true, message: 'config cache refreshed' });
   } catch (e) {
     res.status(500).json({ success: false });
@@ -1470,13 +1471,36 @@ function duplicateContentDetectionMiddleware(req, res, next) {
 
 // ---- chatnio 高频用户自动审核中间件（今日请求超过阈值后强制审核）----
 const CHATNIO_DAILY_MODERATION_THRESHOLD = 10;
+let chatnioHighFreqModerationEnabled = true; // 默认开启，从 DB 加载
+
+async function loadChatnioHighFreqConfig() {
+  try {
+    const [rows] = await pool.query(
+      "SELECT config_value FROM system_configs WHERE config_type='MODERATION' AND config_key='chatnio_highfreq_moderation' AND is_active=1 LIMIT 1"
+    );
+    if (!rows.length) {
+      // 首次运行时自动写入默认配置
+      await pool.query(
+        "INSERT IGNORE INTO system_configs (config_type, config_key, config_value, description, is_active, priority, created_by) VALUES ('MODERATION','chatnio_highfreq_moderation','{\"enabled\":true,\"threshold\":10}','chatnio 高频用户自动审核（超过每日阈值后强制审核）',1,10,'SYSTEM')"
+      );
+      chatnioHighFreqModerationEnabled = true;
+      return;
+    }
+    const cfg = typeof rows[0].config_value === 'string' ? JSON.parse(rows[0].config_value) : rows[0].config_value;
+    chatnioHighFreqModerationEnabled = cfg.enabled !== false;
+    console.log(`[ChatNio HighFreq Moderation] 已加载，enabled=${chatnioHighFreqModerationEnabled}`);
+  } catch (e) {
+    console.error('[ChatNio HighFreq Moderation] 加载失败:', e.message);
+  }
+}
+loadChatnioHighFreqConfig();
 
 function chatnioHighFreqModerationMiddleware(req, res, next) {
   const userId = req.body.user || req.headers['x-user-id'] || 'anonymous';
   const dateKey = moment().format('YYYY-MM-DD');
   const key = `${dateKey}:${userId}`;
   userChatnioDailyCounts[key] = (userChatnioDailyCounts[key] || 0) + 1;
-  if (userChatnioDailyCounts[key] > CHATNIO_DAILY_MODERATION_THRESHOLD) {
+  if (chatnioHighFreqModerationEnabled && userChatnioDailyCounts[key] > CHATNIO_DAILY_MODERATION_THRESHOLD) {
     req._forceChatnioModeration = true;
   }
   next();

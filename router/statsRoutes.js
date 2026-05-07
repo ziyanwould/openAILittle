@@ -2269,6 +2269,47 @@ router.put('/stats/chatnio-default-limit', async (req, res) => {
   }
 });
 
+// ==================== chatnio 高频用户自动审核配置 API ====================
+
+router.get('/stats/chatnio-highfreq-config', async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      "SELECT id, config_value FROM system_configs WHERE config_type='MODERATION' AND config_key='chatnio_highfreq_moderation' AND is_active=1 LIMIT 1"
+    );
+    if (!rows.length) {
+      return res.json({ data: { enabled: true, threshold: 10 }, message: '使用默认值（数据库无记录）' });
+    }
+    const cfg = typeof rows[0].config_value === 'string' ? JSON.parse(rows[0].config_value) : rows[0].config_value;
+    res.json({ data: cfg, message: '获取成功' });
+  } catch (e) {
+    console.error('获取高频用户自动审核配置失败:', e);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+router.put('/stats/chatnio-highfreq-config', async (req, res) => {
+  try {
+    const { enabled } = req.body;
+    if (typeof enabled !== 'boolean') return res.status(400).json({ error: 'enabled 必须为布尔值' });
+
+    const [rows] = await pool.query(
+      "SELECT id, config_value FROM system_configs WHERE config_type='MODERATION' AND config_key='chatnio_highfreq_moderation' AND is_active=1 LIMIT 1"
+    );
+    if (!rows.length) return res.status(404).json({ error: '配置不存在，请重启主服务自动初始化' });
+
+    const cur = typeof rows[0].config_value === 'string' ? JSON.parse(rows[0].config_value) : rows[0].config_value;
+    const updated = { ...cur, enabled };
+    await pool.query('UPDATE system_configs SET config_value=?, updated_at=NOW() WHERE id=?', [JSON.stringify(updated), rows[0].id]);
+
+    try { await fetch('http://localhost:8058/internal/cache/refresh-config'); } catch (_) {}
+
+    res.json({ message: '更新成功', data: { enabled } });
+  } catch (e) {
+    console.error('更新高频用户自动审核配置失败:', e);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
 // ==================== 请求体修改配置管理 API ====================
 
 // 获取请求体修改规则
